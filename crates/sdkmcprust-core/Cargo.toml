@@ -11,7 +11,14 @@ categories.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64 = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
 futures-util.workspace = true
+http = { workspace = true, optional = true }
+http-body = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
 schemars.workspace = true
 sdkmcprust-spec.workspace = true
 serde.workspace = true
@@ -26,9 +33,21 @@ tracing.workspace = true
 default = []
 ## Newline-delimited JSON-RPC over stdin/stdout (or any byte stream).
 stdio = ["tokio/io-std", "tokio/io-util", "tokio/rt"]
+## Streamable HTTP (stateless) as a tower service, plus a hyper-based server.
+http = [
+    "dep:base64",
+    "dep:bytes",
+    "dep:http",
+    "dep:http-body",
+    "dep:http-body-util",
+    "dep:hyper",
+    "dep:hyper-util",
+    "tokio/net",
+    "tokio/rt",
+]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util", "io-util"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util", "io-util", "net"] }
 
 [lints]
 workspace = true

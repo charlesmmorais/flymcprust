@@ -21,6 +21,8 @@ default = ["macros"]
 macros = ["dep:sdkmcprust-macros"]
 ## stdio transport.
 stdio = ["sdkmcprust-core/stdio"]
+## Streamable HTTP transport.
+http = ["sdkmcprust-core/http"]
 
 [lints]
 workspace = true

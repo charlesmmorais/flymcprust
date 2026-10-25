@@ -12,6 +12,7 @@ mod error;
 mod extension;
 pub mod jsonrpc;
 mod limits;
+mod mirror;
 mod server;
 mod tool;
 pub mod transport;
@@ -20,9 +21,10 @@ pub mod transport;
 pub use sdkmcprust_spec::v2026_07_28 as spec;
 
 pub use context::{Ctx, State, TransportContext};
-pub use error::McpError;
+pub use error::{ErrorKind, McpError};
 pub use extension::Extension;
 pub use limits::{Limits, MAX_SUPPORTED_JSON_DEPTH};
+pub use mirror::{MirroredParam, ParamKind};
 pub use server::{BuildError, McpRequest, Server, ServerBuilder};
 pub use tool::{
     CallFn, IntoToolError, IntoToolResult, Json, StateRequirement, Tool, ToolDef, ToolError,

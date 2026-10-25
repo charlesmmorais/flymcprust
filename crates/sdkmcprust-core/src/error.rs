@@ -14,19 +14,36 @@ use crate::spec::{self, error_codes};
 /// Maximum length of client-provided text echoed back in error messages.
 const MAX_ECHO_CHARS: usize = 128;
 
+/// How an error relates to the request, independent of transport. HTTP uses
+/// it to pick a status code (400, 404, 200 or 500).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// The request is malformed or cannot be accepted as sent.
+    BadRequest,
+    /// The method does not exist.
+    MethodNotFound,
+    /// A well-formed request that could not be completed (e.g. unknown tool).
+    Failed,
+    /// A server-side failure.
+    Internal,
+}
+
 /// A JSON-RPC error returned to the client.
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpError {
     code: i64,
+    kind: ErrorKind,
     message: Cow<'static, str>,
     // Boxed to keep `McpError` (and every `Result` carrying it) small.
     data: Option<Box<Value>>,
 }
 
 impl McpError {
-    fn new(code: i64, message: impl Into<Cow<'static, str>>) -> Self {
+    fn new(code: i64, kind: ErrorKind, message: impl Into<Cow<'static, str>>) -> Self {
         Self {
             code,
+            kind,
             message: message.into(),
             data: None,
         }
@@ -35,13 +52,21 @@ impl McpError {
     /// `-32700`: the message is not valid JSON.
     #[must_use]
     pub fn parse_error() -> Self {
-        Self::new(error_codes::PARSE_ERROR, "Parse error")
+        Self::new(
+            error_codes::PARSE_ERROR,
+            ErrorKind::BadRequest,
+            "Parse error",
+        )
     }
 
     /// `-32600`: the message is not a valid JSON-RPC request.
     #[must_use]
     pub fn invalid_request(reason: &'static str) -> Self {
-        Self::new(error_codes::INVALID_REQUEST_ERROR, reason)
+        Self::new(
+            error_codes::INVALID_REQUEST_ERROR,
+            ErrorKind::BadRequest,
+            reason,
+        )
     }
 
     /// `-32601`: the method does not exist.
@@ -49,6 +74,7 @@ impl McpError {
     pub fn method_not_found(method: &str) -> Self {
         Self::new(
             error_codes::METHOD_NOT_FOUND_ERROR,
+            ErrorKind::MethodNotFound,
             format!("Method not found: {}", truncate(method)),
         )
     }
@@ -56,25 +82,51 @@ impl McpError {
     /// `-32601` with a custom, client-safe explanation.
     #[must_use]
     pub fn method_not_found_explained(explanation: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(error_codes::METHOD_NOT_FOUND_ERROR, explanation)
+        Self::new(
+            error_codes::METHOD_NOT_FOUND_ERROR,
+            ErrorKind::MethodNotFound,
+            explanation,
+        )
     }
 
-    /// `-32602`: the parameters are invalid.
+    /// `-32602`: the parameters are malformed (including missing `_meta`).
     #[must_use]
     pub fn invalid_params(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(error_codes::INVALID_PARAMS_ERROR, message)
+        Self::new(
+            error_codes::INVALID_PARAMS_ERROR,
+            ErrorKind::BadRequest,
+            message,
+        )
+    }
+
+    /// `-32602`: the requested tool does not exist.
+    #[must_use]
+    pub fn unknown_tool(name: &str) -> Self {
+        Self::new(
+            error_codes::INVALID_PARAMS_ERROR,
+            ErrorKind::Failed,
+            format!("Unknown tool: {}", truncate(name)),
+        )
     }
 
     /// `-32603`: a generic internal error. Details must be logged, not sent.
     #[must_use]
     pub fn internal() -> Self {
-        Self::new(error_codes::INTERNAL_ERROR, "Internal error")
+        Self::new(
+            error_codes::INTERNAL_ERROR,
+            ErrorKind::Internal,
+            "Internal error",
+        )
     }
 
     /// `-32020`: HTTP headers do not match the request body.
     #[must_use]
     pub fn header_mismatch(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(error_codes::HEADER_MISMATCH_ERROR, message)
+        Self::new(
+            error_codes::HEADER_MISMATCH_ERROR,
+            ErrorKind::BadRequest,
+            message,
+        )
     }
 
     /// `-32021`: the request needs client capabilities the client did not declare.
@@ -82,6 +134,7 @@ impl McpError {
     pub fn missing_client_capability(required: &spec::ClientCapabilities) -> Self {
         let mut err = Self::new(
             error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY_ERROR,
+            ErrorKind::BadRequest,
             "Missing required client capability",
         );
         err.data = Some(Box::new(json!({ "requiredCapabilities": required })));
@@ -93,6 +146,7 @@ impl McpError {
     pub fn unsupported_protocol_version(requested: &str, supported: &[String]) -> Self {
         let mut err = Self::new(
             error_codes::UNSUPPORTED_PROTOCOL_VERSION_ERROR,
+            ErrorKind::BadRequest,
             "Unsupported protocol version",
         );
         err.data = Some(Box::new(
@@ -105,6 +159,12 @@ impl McpError {
     #[must_use]
     pub fn code(&self) -> i64 {
         self.code
+    }
+
+    /// How the error relates to the request.
+    #[must_use]
+    pub fn kind(&self) -> ErrorKind {
+        self.kind
     }
 
     /// The client-facing message.

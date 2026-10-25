@@ -9,16 +9,17 @@ use std::time::Duration;
 
 use futures_util::FutureExt as _;
 use serde::Deserialize;
+use serde_json::Map;
 use serde_json::value::RawValue;
-use serde_json::{Map, Value};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::{Ctx, RequestMeta, TransportContext, TypeMap};
-use crate::error::{McpError, truncate};
+use crate::error::McpError;
 use crate::extension::{self, Extension};
 use crate::jsonrpc::{self, Message, Rejection, Request, Response};
 use crate::limits::Limits;
+use crate::mirror::{self, MirroredParam};
 use crate::spec::{self, CacheScope, RequestId, methods};
 use crate::tool::{CallFn, Tool, ToolDef, ToolOutput};
 
@@ -42,6 +43,14 @@ pub enum BuildError {
         tool: String,
         /// The missing type.
         type_name: &'static str,
+    },
+    /// An `x-mcp-header` annotation breaks the specification's constraints.
+    #[error("tool `{tool}` has an invalid `x-mcp-header` annotation: {reason}")]
+    InvalidHeaderAnnotation {
+        /// The tool name.
+        tool: String,
+        /// The violated constraint.
+        reason: String,
     },
     /// An extension identifier is malformed or registered twice.
     #[error("invalid or duplicate extension identifier `{0}`")]
@@ -223,6 +232,7 @@ impl ServerBuilder {
                 return Err(BuildError::DuplicateTool(a.tool.name.clone()));
             }
         }
+        let mut mirrored = Vec::with_capacity(tools.len());
         for def in &tools {
             if !is_valid_tool_name(&def.tool.name) {
                 return Err(BuildError::InvalidToolName(def.tool.name.clone()));
@@ -235,15 +245,22 @@ impl ServerBuilder {
                     });
                 }
             }
+            let params = mirror::collect(&def.tool.input_schema.extra).map_err(|reason| {
+                BuildError::InvalidHeaderAnnotation {
+                    tool: def.tool.name.clone(),
+                    reason,
+                }
+            })?;
+            mirrored.push(params);
         }
 
-        let mut extensions = Map::new();
+        let mut extensions = std::collections::BTreeMap::new();
         for ext in &self.extensions {
             let id = ext.id();
             if !extension::is_valid_id(id) || extensions.contains_key(id) {
                 return Err(BuildError::InvalidExtension(id.to_owned()));
             }
-            extensions.insert(id.to_owned(), Value::Object(ext.settings()));
+            extensions.insert(id.to_owned(), ext.settings());
         }
 
         let result_meta = self.include_server_info.then(|| spec::ResultMetaObject {
@@ -253,15 +270,7 @@ impl ServerBuilder {
 
         let capabilities = spec::ServerCapabilities {
             tools: Some(spec::ServerCapabilitiesTools { list_changed: None }),
-            extensions: (!extensions.is_empty()).then(|| {
-                extensions
-                    .into_iter()
-                    .filter_map(|(k, v)| match v {
-                        Value::Object(o) => Some((k, o)),
-                        _ => None,
-                    })
-                    .collect()
-            }),
+            extensions: (!extensions.is_empty()).then_some(extensions),
             ..spec::ServerCapabilities::default()
         };
 
@@ -291,9 +300,11 @@ impl ServerBuilder {
 
         let registry = tools
             .into_iter()
-            .map(|t| RegisteredTool {
+            .zip(mirrored)
+            .map(|(t, mirrored)| RegisteredTool {
                 name: t.tool.name,
                 call: t.call,
+                mirrored,
             })
             .collect();
 
@@ -336,6 +347,7 @@ struct Inner {
 struct RegisteredTool {
     name: String,
     call: CallFn,
+    mirrored: Vec<MirroredParam>,
 }
 
 impl std::fmt::Debug for Server {
@@ -383,6 +395,21 @@ impl Server {
     #[must_use]
     pub fn limits(&self) -> &Limits {
         &self.inner.limits
+    }
+
+    /// Parameters of `tool` mirrored into `Mcp-Param-*` HTTP headers, or
+    /// `None` if the tool does not exist.
+    #[must_use]
+    pub fn mirrored_params(&self, tool: &str) -> Option<&[MirroredParam]> {
+        self.find_tool(tool).map(|t| t.mirrored.as_slice())
+    }
+
+    fn find_tool(&self, name: &str) -> Option<&RegisteredTool> {
+        self.inner
+            .tools
+            .binary_search_by(|t| t.name.as_str().cmp(name))
+            .ok()
+            .and_then(|i| self.inner.tools.get(i))
     }
 
     /// The protocol versions this server accepts.
@@ -514,12 +541,8 @@ impl Server {
         cancellation: CancellationToken,
     ) -> Result<Option<Box<RawValue>>, McpError> {
         let tool = self
-            .inner
-            .tools
-            .binary_search_by(|t| t.name.as_str().cmp(name))
-            .ok()
-            .and_then(|i| self.inner.tools.get(i))
-            .ok_or_else(|| McpError::invalid_params(format!("Unknown tool: {}", truncate(name))))?;
+            .find_tool(name)
+            .ok_or_else(|| McpError::unknown_tool(name))?;
 
         let ctx = Ctx::new(
             id,
