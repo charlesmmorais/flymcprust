@@ -25,6 +25,9 @@ http-body = { workspace = true, optional = true }
 http-body-util = { workspace = true, optional = true }
 hyper = { workspace = true, optional = true }
 hyper-util = { workspace = true, optional = true }
+hyper-rustls = { workspace = true, optional = true }
+ring = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
 inventory = { workspace = true, optional = true }
 schemars.workspace = true
 sdkmcprust-spec.workspace = true
@@ -51,6 +54,16 @@ http = [
     "dep:hyper-util",
     "tokio/net",
     "tokio/rt",
+]
+## Built-in `auth::JwtVerifier` for JWT access tokens, with JWKS discovery
+## over HTTPS.
+oauth = [
+    "http",
+    "dep:hyper-rustls",
+    "dep:ring",
+    "dep:rustls",
+    "hyper/client",
+    "hyper-util/client-legacy",
 ]
 
 ## In-process `testing::TestClient` for integration tests.

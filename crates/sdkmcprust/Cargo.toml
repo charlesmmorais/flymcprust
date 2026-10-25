@@ -30,6 +30,8 @@ macros = ["dep:sdkmcprust-macros"]
 stdio = ["sdkmcprust-core/stdio"]
 ## Streamable HTTP transport.
 http = ["sdkmcprust-core/http"]
+## Built-in JWT verifier for OAuth access tokens (implies `http`).
+oauth = ["http", "sdkmcprust-core/oauth"]
 ## `logging::init()`: write the SDK's log (including fix-it hints) to stderr.
 logging = ["dep:tracing-subscriber"]
 ## In-process `testing::TestClient` for integration tests.

@@ -61,13 +61,15 @@ SSE responses for `notifications/progress` and `notifications/message`
 Closes the last 3 conformance failures. The plain JSON path must stay as fast
 as today.
 
-### 6. Authentication (OAuth 2.1 resource server)
+### 6. Authentication (OAuth 2.1 resource server) (done)
 
-- Done: `OAuth` on the HTTP transport (bearer tokens, `401`/`403` challenges,
+- `OAuth` on the HTTP transport (bearer tokens, `401`/`403` challenges,
   Protected Resource Metadata), the `TokenVerifier` trait, `ctx.principal()`,
   per-handler `scopes = [..]` with hierarchies, and `requestState` and legacy
   sessions bound to the authenticated principal.
-- Next: a built-in JWT verifier (`oauth` feature) with JWKS discovery.
+- `auth::JwtVerifier` (`oauth` feature): JWT access tokens, keys discovered
+  from the issuer's metadata (RFC 8414, OpenID Connect), cached and
+  refreshed on rotation.
 
 ### 7. First release
 

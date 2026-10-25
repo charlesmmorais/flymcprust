@@ -8,6 +8,12 @@
 //! them. stdio is not authorized this way: per the specification, it takes
 //! credentials from its environment.
 
+#[cfg(feature = "oauth")]
+mod jwt;
+
+#[cfg(feature = "oauth")]
+pub use jwt::{Algorithm, JwtError, JwtVerifier, JwtVerifierBuilder};
+
 use std::collections::BTreeSet;
 use std::fmt;
 use std::future::Future;

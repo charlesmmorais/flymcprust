@@ -6,9 +6,9 @@
 **Status:** complete MCP server SDK for protocol 2026-07-28 (all 147 checks
 of the official conformance suite pass) that also serves 2025-11-25 and
 2025-06-18 clients: tools, resources, prompts, completion, multi round-trip
-requests, progress and logging, over stdio and Streamable HTTP. Phase 6
-(OAuth authorization) is in progress; see the [roadmap](docs/ROADMAP.md).
-Not published on crates.io yet.
+requests, progress and logging, over stdio and Streamable HTTP, with
+OAuth 2.1 authorization on HTTP. Next: the first release; see the
+[roadmap](docs/ROADMAP.md). Not published on crates.io yet.
 
 - **Spec-first.** Targets MCP revision **2026-07-28**: stateless, with no
   `initialize` and no sessions. Clients of 2025-11-25 and 2025-06-18 work too,
@@ -176,6 +176,7 @@ async fn import(ctx: Ctx, files: Vec<String>) -> Result<String, ToolError> {
 ### Requiring OAuth (HTTP)
 
 ```rust
+use sdkmcprust::auth::JwtVerifier; // feature `oauth`
 use sdkmcprust::transport::http::{AllowedHosts, HttpConfig, OAuth, StreamableHttpService};
 
 /// Deletes a file.
@@ -185,7 +186,9 @@ async fn delete_file(ctx: Ctx, path: String) -> Result<String, ToolError> {
     // ...
 }
 
-let oauth = OAuth::builder("https://mcp.example.com/mcp", my_verifier)
+let resource = "https://mcp.example.com/mcp";
+let verifier = JwtVerifier::builder("https://auth.example.com", resource).build()?;
+let oauth = OAuth::builder(resource, verifier)
     .authorization_server("https://auth.example.com")
     .scopes_supported(["mcp"])
     .required_scopes(["mcp"])
@@ -204,8 +207,13 @@ let service = StreamableHttpService::with_config(server, config);
   every listed scope get `403` with an `insufficient_scope` challenge naming
   all of them. `.scope_implies(..)` declares hierarchies such as `files`
   implying `files:read`.
-- `my_verifier` implements `TokenVerifier` (a closure
-  `Fn(&str) -> Result<Principal, TokenError>` works). It must check that the
+- `JwtVerifier` (feature `oauth`) checks JWT access tokens: signature with
+  the keys the authorization server publishes (found through its metadata,
+  cached, refreshed on rotation), issuer, audience (this server), expiry.
+  Only asymmetric algorithms exist in it (RSA, RSA-PSS, ECDSA, Ed25519), so
+  `none` and HMAC tokens are always refused. For opaque tokens, implement
+  `TokenVerifier` yourself (a closure
+  `Fn(&str) -> Result<Principal, TokenError>` works); it must check that the
   token was issued for this server.
 - `requestState` and legacy sessions are bound to the user: a state or
   session obtained with one user's token is rejected with another's.
@@ -219,6 +227,7 @@ let service = StreamableHttpService::with_config(server, config);
 | `macros` | yes | The `#[tool]`, `#[resource]` and `#[prompt]` attributes. |
 | `stdio` | no | stdio transport. |
 | `http` | no | Streamable HTTP transport (`tower::Service` plus a hyper server). |
+| `oauth` | no | `auth::JwtVerifier` for OAuth access tokens (implies `http`; adds `ring` and `rustls`). |
 | `auto-register` | no | `auto_tools()`, `auto_resources()` and `auto_prompts()` on the builder. |
 | `logging` | no | `logging::init()`: the log, with fix-it hints, on stderr. |
 | `test-client` | no | In-process `testing::TestClient` for integration tests. |
@@ -240,7 +249,7 @@ let service = StreamableHttpService::with_config(server, config);
 | Completion (`completion/complete`) | ✅ |
 | Multi round-trip requests: elicitation, sampling, roots; signed `requestState` | ✅ |
 | Progress (`notifications/progress`), logging (`notifications/message`, deprecated), SSE response streaming | ✅ |
-| OAuth 2.1 authorization (resource server): bearer tokens, RFC 9728 metadata, `401`/`403` challenges, per-handler scopes | ✅ (bring a `TokenVerifier`; a built-in JWT verifier is in progress) |
+| OAuth 2.1 authorization (resource server): bearer tokens, RFC 9728 metadata, `401`/`403` challenges, per-handler scopes | ✅ (built-in JWT verifier with the `oauth` feature, or bring a `TokenVerifier`) |
 | Subscriptions, Tasks, MCP Apps | Not planned until there is demand; the architecture reserves their place ([ARCHITECTURE](docs/ARCHITECTURE.md) §12) |
 | 2025-11-25 and 2025-06-18 clients: `initialize`, `ping`, signed sessions, `ctx.elicit` as server-to-client requests (stdio and SSE) | ✅ (on by default; `legacy_clients(false)` turns it off) |
 

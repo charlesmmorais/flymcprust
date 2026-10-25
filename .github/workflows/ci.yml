@@ -102,7 +102,7 @@ jobs:
       - name: Each feature alone, and none, without warnings
         run: |
           cargo clippy -p sdkmcprust --no-default-features -- -D warnings
-          for feature in macros stdio http logging test-client auto-register; do
+          for feature in macros stdio http oauth logging test-client auto-register; do
             cargo clippy -p sdkmcprust --no-default-features --features "$feature" -- -D warnings
           done
 
@@ -131,6 +131,7 @@ jobs:
           cargo fuzz run parse_message -- -max_total_time=60
           cargo fuzz run handle_message -- -max_total_time=60
           cargo fuzz run match_uri -- -max_total_time=60
+          cargo fuzz run verify_jwt -- -max_total_time=60
 
   bench:
     name: benchmarks compile

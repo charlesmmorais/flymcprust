@@ -36,6 +36,7 @@
 //! | `macros` | yes | The [`tool`], [`resource`] and [`prompt`] attribute macros. |
 //! | `stdio` | no | stdio transport ([`Server::serve_stdio`]). |
 //! | `http` | no | Streamable HTTP transport ([`transport::http`]). |
+//! | `oauth` | no | `auth::JwtVerifier` for OAuth access tokens (implies `http`). |
 //! | `auto-register` | no | [`ServerBuilder::auto_tools`] (and `auto_resources`, `auto_prompts`) collect every annotated item. |
 //! | `logging` | no | `logging::init()` writes the log, with fix-it hints, to stderr. |
 //! | `test-client` | no | In-process `testing::TestClient` for tests. |
