@@ -1,0 +1,5 @@
+error: expected an absolute URI such as `config://app` (use `template = ".."` for URI templates)
+ --> tests/ui/resource_invalid_uri.rs:3:12
+  |
+3 | #[resource("not a uri")]
+  |            ^^^^^^^^^^^

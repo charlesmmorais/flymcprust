@@ -1,21 +1,19 @@
 //! Expansion of `#[tool]`.
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::parse::Parser as _;
 use syn::spanned::Spanned as _;
-use syn::{
-    Attribute, Error, FnArg, GenericArgument, Ident, ItemFn, LitBool, LitStr, Pat, PathArguments,
-    ReturnType, Type,
-};
+use syn::{Error, Ident, ItemFn, LitBool, LitStr, ReturnType};
 
 use crate::docs;
+use crate::params::{self, Options, Param};
 
-/// Root of every generated path, so user crates need no direct dependency
-/// on serde, schemars or serde_json.
-fn krate() -> TokenStream {
-    quote!(::sdkmcprust::__private)
-}
+const OPTIONS: Options = Options {
+    macro_name: "tool",
+    schema_attrs: true,
+    complete: false,
+};
 
 #[derive(Default)]
 struct ToolArgs {
@@ -84,29 +82,13 @@ fn parse_args(attr: TokenStream) -> syn::Result<ToolArgs> {
     Ok(args)
 }
 
-enum Param {
-    /// A JSON argument, part of the input schema.
-    Arg {
-        ident: Ident,
-        ty: Type,
-        /// `#[serde]` / `#[schemars]` attributes forwarded to the schema field.
-        forwarded: Vec<Attribute>,
-        /// Description from a doc comment on the parameter.
-        doc: Option<String>,
-    },
-    /// The request context.
-    Ctx,
-    /// Shared state of the inner type.
-    State(Type),
-}
-
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let args = parse_args(attr)?;
     let mut func: ItemFn = syn::parse2(item)?;
-    check_signature(&func)?;
+    params::check_signature(&func, OPTIONS.macro_name)?;
 
-    let params = collect_params(&mut func)?;
-    let krate = krate();
+    let params = params::collect_params(&mut func, &OPTIONS)?;
+    let krate = params::krate();
     let fn_ident = &func.sig.ident;
     let vis = &func.vis;
 
@@ -125,19 +107,12 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     }
 
     let (doc_description, arg_docs) = docs::split(&docs::doc_lines(&func.attrs));
-    for documented in arg_docs.keys() {
-        let known = params
-            .iter()
-            .any(|p| matches!(p, Param::Arg { ident, .. } if ident == documented));
-        if !known {
-            return Err(Error::new(
-                fn_ident.span(),
-                format!(
-                    "`# Arguments` documents `{documented}`, which is not a JSON parameter of this tool"
-                ),
-            ));
-        }
-    }
+    params::check_documented_args(
+        &params,
+        &arg_docs,
+        fn_ident,
+        "a JSON parameter of this tool",
+    )?;
     let description = args
         .description
         .as_ref()
@@ -147,41 +122,22 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     // The argument struct and the call.
     let mut fields = Vec::new();
     let mut destructure = Vec::new();
-    let mut extract = Vec::new();
-    let mut call_args = Vec::new();
-    let mut state_types = Vec::new();
-    for (i, param) in params.iter().enumerate() {
-        match param {
-            Param::Arg {
-                ident,
-                ty,
-                forwarded,
-                doc,
-            } => {
-                let doc = doc
-                    .clone()
-                    .or_else(|| arg_docs.get(&ident.to_string()).cloned());
-                let doc_attr = doc.map(|d| {
-                    let d = format!(" {d}");
-                    quote!(#[doc = #d])
-                });
-                fields.push(quote! { #doc_attr #(#forwarded)* #ident: #ty });
-                destructure.push(quote!(#ident));
-                call_args.push(quote!(#ident));
-            }
-            Param::Ctx => call_args.push(quote!(::core::clone::Clone::clone(&__ctx))),
-            Param::State(inner) => {
-                let var = format_ident!("__state{}", i);
-                extract.push(quote! {
-                    let #var = __ctx
-                        .state::<#inner>()
-                        .ok_or_else(#krate::missing_state)?;
-                });
-                call_args.push(quote!(#var));
-                state_types.push(inner.clone());
-            }
+    for param in &params {
+        if let Param::Arg(arg) = param {
+            let ident = &arg.ident;
+            let ty = &arg.ty;
+            let forwarded = &arg.forwarded;
+            let doc_attr = params::arg_doc(arg, &arg_docs).map(|d| {
+                let d = format!(" {d}");
+                quote!(#[doc = #d])
+            });
+            fields.push(quote! { #doc_attr #(#forwarded)* #ident: #ty });
+            destructure.push(quote!(#ident));
         }
     }
+    let (call_args, injected) = params::call_args(&params);
+    let extract = &injected.extract;
+    let state_types = &injected.states;
 
     let call = if func.sig.asyncness.is_some() {
         quote!(#fn_ident(#(#call_args),*).await)
@@ -277,7 +233,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
 
 #[cfg(feature = "auto-register")]
 fn auto_register(fn_ident: &Ident) -> TokenStream {
-    let krate = krate();
+    let krate = params::krate();
     quote! {
         #krate::inventory::submit! {
             #krate::AutoTool::new(<#fn_ident as #krate::Tool>::definition)
@@ -288,155 +244,6 @@ fn auto_register(fn_ident: &Ident) -> TokenStream {
 #[cfg(not(feature = "auto-register"))]
 fn auto_register(_: &Ident) -> TokenStream {
     TokenStream::new()
-}
-
-fn check_signature(func: &ItemFn) -> syn::Result<()> {
-    let sig = &func.sig;
-    if !sig.generics.params.is_empty() {
-        return Err(Error::new_spanned(
-            &sig.generics,
-            "#[tool] functions cannot be generic",
-        ));
-    }
-    if let Some(variadic) = &sig.variadic {
-        return Err(Error::new_spanned(
-            variadic,
-            "#[tool] functions cannot be variadic",
-        ));
-    }
-    if let Some(abi) = &sig.abi {
-        return Err(Error::new_spanned(
-            abi,
-            "#[tool] functions cannot be `extern`",
-        ));
-    }
-    if let syn::Safety::Unsafe(token) = &sig.safety {
-        return Err(Error::new_spanned(
-            token,
-            "#[tool] functions cannot be `unsafe`",
-        ));
-    }
-    if let ReturnType::Type(_, ty) = &sig.output
-        && let Type::ImplTrait(_) = &**ty
-    {
-        return Err(Error::new_spanned(
-            ty,
-            "#[tool] functions cannot return `impl Trait`; name the type",
-        ));
-    }
-    Ok(())
-}
-
-/// Classifies parameters and strips the attributes the compiler would reject.
-fn collect_params(func: &mut ItemFn) -> syn::Result<Vec<Param>> {
-    let mut params = Vec::new();
-    let mut errors: Option<Error> = None;
-    let mut push_error = |e: Error| match &mut errors {
-        Some(existing) => existing.combine(e),
-        None => errors = Some(e),
-    };
-
-    for input in &mut func.sig.inputs {
-        let pat_type = match input {
-            FnArg::Receiver(receiver) => {
-                push_error(Error::new_spanned(
-                    receiver,
-                    "#[tool] must be applied to a free function, not a method taking `self`",
-                ));
-                continue;
-            }
-            FnArg::Typed(pat_type) => pat_type,
-        };
-
-        let mut forwarded = Vec::new();
-        let mut doc_lines = Vec::new();
-        for attr in std::mem::take(&mut pat_type.attrs) {
-            if attr.path().is_ident("doc") {
-                doc_lines.extend(docs::doc_lines(std::slice::from_ref(&attr)));
-            } else if attr.path().is_ident("serde") || attr.path().is_ident("schemars") {
-                forwarded.push(attr);
-            } else {
-                push_error(Error::new_spanned(
-                    &attr,
-                    "only doc comments, #[serde(..)] and #[schemars(..)] are allowed on #[tool] parameters",
-                ));
-            }
-        }
-
-        let ident = match &*pat_type.pat {
-            Pat::Ident(pat) if pat.by_ref.is_none() && pat.subpat.is_none() => pat.ident.clone(),
-            other => {
-                push_error(Error::new_spanned(
-                    other,
-                    "#[tool] parameters must be plain identifiers",
-                ));
-                continue;
-            }
-        };
-
-        match classify(&pat_type.ty) {
-            Ok(Some(param)) => {
-                if !forwarded.is_empty() || !doc_lines.is_empty() {
-                    push_error(Error::new_spanned(
-                        &pat_type.ty,
-                        "`Ctx` and `State<T>` parameters are not part of the schema and cannot carry attributes",
-                    ));
-                }
-                params.push(param);
-            }
-            Ok(None) => {
-                let doc = doc_lines.join(" ").trim().to_owned();
-                params.push(Param::Arg {
-                    ident,
-                    ty: (*pat_type.ty).clone(),
-                    forwarded,
-                    doc: (!doc.is_empty()).then_some(doc),
-                });
-            }
-            Err(e) => push_error(e),
-        }
-    }
-
-    match errors {
-        Some(e) => Err(e),
-        None => Ok(params),
-    }
-}
-
-/// `Ok(Some(..))` for injected parameters, `Ok(None)` for JSON arguments.
-fn classify(ty: &Type) -> syn::Result<Option<Param>> {
-    match ty {
-        Type::Reference(r) => Err(Error::new_spanned(
-            r,
-            "#[tool] parameters must be owned (e.g. `String` instead of `&str`)",
-        )),
-        Type::ImplTrait(t) => Err(Error::new_spanned(
-            t,
-            "#[tool] parameters cannot use `impl Trait`",
-        )),
-        Type::Path(path) if path.qself.is_none() => {
-            let Some(last) = path.path.segments.last() else {
-                return Ok(None);
-            };
-            if last.ident == "Ctx" && last.arguments.is_empty() {
-                return Ok(Some(Param::Ctx));
-            }
-            if last.ident == "State" {
-                if let PathArguments::AngleBracketed(args) = &last.arguments
-                    && let (1, Some(GenericArgument::Type(inner))) =
-                        (args.args.len(), args.args.first())
-                {
-                    return Ok(Some(Param::State(inner.clone())));
-                }
-                return Err(Error::new_spanned(
-                    last,
-                    "expected `State<T>` with exactly one type argument",
-                ));
-            }
-            Ok(None)
-        }
-        _ => Ok(None),
-    }
 }
 
 fn is_valid_tool_name(name: &str) -> bool {

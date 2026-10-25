@@ -1,5 +1,6 @@
 //! The MCP server: builder, immutable registry and request dispatch.
 
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
@@ -14,14 +15,18 @@ use serde_json::value::RawValue;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use crate::completion::{Completer, CompletionRequest};
 use crate::context::{Ctx, RequestMeta, TransportContext, TypeMap};
 use crate::error::McpError;
 use crate::extension::{self, Extension};
 use crate::jsonrpc::{self, Message, Rejection, Request, Response};
 use crate::limits::Limits;
 use crate::mirror::{self, MirroredParam};
+use crate::prompt::{GetFn, Prompt, PromptArguments, PromptDef};
+use crate::resource::{ReadFn, Resource, ResourceDef, ResourceKind};
 use crate::spec::{self, CacheScope, RequestId, methods};
-use crate::tool::{CallFn, Tool, ToolDef, ToolOutput};
+use crate::tool::{CallFn, StateRequirement, Tool, ToolDef, ToolError, ToolOutput};
+use crate::uri_template::{self, UriTemplate, UriVars};
 
 /// The `resultType` of final results.
 const COMPLETE: &str = "complete";
@@ -36,13 +41,38 @@ pub enum BuildError {
     /// A tool name breaks the specification's naming rules.
     #[error("invalid tool name `{0}`: use 1-128 characters from A-Z, a-z, 0-9, `_`, `-` and `.`")]
     InvalidToolName(String),
-    /// A tool needs shared state that was not registered.
-    #[error("tool `{tool}` needs state of type `{type_name}`; register it with `.state(..)`")]
+    /// A handler needs shared state that was not registered.
+    #[error("`{handler}` needs state of type `{type_name}`; register it with `.state(..)`")]
     MissingState {
-        /// The tool name.
-        tool: String,
+        /// The tool or prompt name, or the resource URI.
+        handler: String,
         /// The missing type.
         type_name: &'static str,
+    },
+    /// A resource URI or URI template is invalid.
+    #[error("invalid resource `{uri}`: {reason}")]
+    InvalidResource {
+        /// The URI or URI template.
+        uri: String,
+        /// What is wrong with it.
+        reason: String,
+    },
+    /// Two resources share a URI, or two templates share a URI template.
+    #[error("duplicate resource `{0}`")]
+    DuplicateResource(String),
+    /// Two prompts share a name.
+    #[error("duplicate prompt name `{0}`")]
+    DuplicatePrompt(String),
+    /// A prompt name is empty or contains control characters.
+    #[error("invalid prompt name `{0}`")]
+    InvalidPromptName(String),
+    /// A completion provider is attached to an unknown argument.
+    #[error("`{owner}` has a completion provider for unknown argument `{argument}`")]
+    InvalidCompletion {
+        /// The prompt name or URI template.
+        owner: String,
+        /// The argument or template variable.
+        argument: String,
     },
     /// An `x-mcp-header` annotation breaks the specification's constraints.
     #[error("tool `{tool}` has an invalid `x-mcp-header` annotation: {reason}")]
@@ -69,6 +99,8 @@ pub struct ServerBuilder {
     info: spec::Implementation,
     instructions: Option<String>,
     tools: Vec<ToolDef>,
+    resources: Vec<ResourceDef>,
+    prompts: Vec<PromptDef>,
     state: TypeMap,
     extensions: Vec<Box<dyn Extension>>,
     limits: Limits,
@@ -83,6 +115,8 @@ impl std::fmt::Debug for ServerBuilder {
         f.debug_struct("ServerBuilder")
             .field("info", &self.info)
             .field("tools", &self.tools.len())
+            .field("resources", &self.resources.len())
+            .field("prompts", &self.prompts.len())
             .field("limits", &self.limits)
             .finish_non_exhaustive()
     }
@@ -95,6 +129,8 @@ impl ServerBuilder {
             info: spec::Implementation::new(name.into(), version.into()),
             instructions: None,
             tools: Vec::new(),
+            resources: Vec::new(),
+            prompts: Vec::new(),
             state: TypeMap::default(),
             extensions: Vec::new(),
             limits: Limits::default(),
@@ -140,7 +176,53 @@ impl ServerBuilder {
         self
     }
 
-    /// Registers shared state, available to tools through `State<T>`.
+    /// Registers a resource or resource template declared with `#[resource]`
+    /// (or implementing [`Resource`]).
+    pub fn resource<T: Resource>(mut self) -> Self {
+        self.resources.push(T::definition());
+        self
+    }
+
+    /// Registers every `#[resource]` linked into the binary (feature
+    /// `auto-register`).
+    #[cfg(feature = "auto-register")]
+    pub fn auto_resources(mut self) -> Self {
+        for resource in inventory::iter::<crate::auto::AutoResource> {
+            self.resources.push(resource.definition());
+        }
+        self
+    }
+
+    /// Registers a resource definition built by hand.
+    pub fn resource_def(mut self, def: ResourceDef) -> Self {
+        self.resources.push(def);
+        self
+    }
+
+    /// Registers a prompt declared with `#[prompt]` (or implementing
+    /// [`Prompt`]).
+    pub fn prompt<T: Prompt>(mut self) -> Self {
+        self.prompts.push(T::definition());
+        self
+    }
+
+    /// Registers every `#[prompt]` linked into the binary (feature
+    /// `auto-register`).
+    #[cfg(feature = "auto-register")]
+    pub fn auto_prompts(mut self) -> Self {
+        for prompt in inventory::iter::<crate::auto::AutoPrompt> {
+            self.prompts.push(prompt.definition());
+        }
+        self
+    }
+
+    /// Registers a prompt definition built by hand.
+    pub fn prompt_def(mut self, def: PromptDef) -> Self {
+        self.prompts.push(def);
+        self
+    }
+
+    /// Registers shared state, available to handlers through `State<T>`.
     pub fn state<T: Send + Sync + 'static>(mut self, value: T) -> Self {
         self.state.insert(Arc::new(value));
         self
@@ -170,19 +252,22 @@ impl ServerBuilder {
         self
     }
 
-    /// Maximum duration of one tool call. Default: 30 s.
+    /// Maximum duration of one tool call, resource read or prompt. Default:
+    /// 30 s.
     pub fn tool_timeout(mut self, timeout: Duration) -> Self {
         self.limits.tool_timeout = timeout;
         self
     }
 
-    /// Maximum number of concurrent tool calls. Default: 64.
+    /// Maximum number of concurrent handler invocations (tools, resources and
+    /// prompts). Default: 64.
     pub fn max_concurrent_calls(mut self, calls: usize) -> Self {
         self.limits.max_concurrent_calls = calls;
         self
     }
 
-    /// Freshness hint (`ttlMs`) for `tools/list`. Default: 5 minutes.
+    /// Freshness hint (`ttlMs`) for `tools/list`, `resources/list`,
+    /// `resources/templates/list` and `prompts/list`. Default: 5 minutes.
     pub fn list_ttl(mut self, ttl: Duration) -> Self {
         self.list_ttl = ttl;
         self
@@ -212,9 +297,10 @@ impl ServerBuilder {
     ///
     /// # Errors
     ///
-    /// Returns a [`BuildError`] for duplicate or invalid tool names, missing
-    /// state, invalid extensions, out-of-range limits, or serialization
-    /// failures of the pre-built responses.
+    /// Returns a [`BuildError`] for duplicate or invalid names and URIs,
+    /// missing state, invalid completion providers, invalid extensions,
+    /// out-of-range limits, or serialization failures of the pre-built
+    /// responses.
     pub fn build(self) -> Result<Server, BuildError> {
         if self.limits.max_message_bytes == 0 {
             return Err(BuildError::InvalidLimit(
@@ -248,14 +334,7 @@ impl ServerBuilder {
             if !is_valid_tool_name(&def.tool.name) {
                 return Err(BuildError::InvalidToolName(def.tool.name.clone()));
             }
-            for req in &def.required_state {
-                if !self.state.contains(req.type_id) {
-                    return Err(BuildError::MissingState {
-                        tool: def.tool.name.clone(),
-                        type_name: req.type_name,
-                    });
-                }
-            }
+            check_state(&self.state, &def.required_state, &def.tool.name)?;
             let params = mirror::collect(&def.tool.input_schema.extra).map_err(|reason| {
                 BuildError::InvalidHeaderAnnotation {
                     tool: def.tool.name.clone(),
@@ -265,7 +344,10 @@ impl ServerBuilder {
             mirrored.push(params);
         }
 
-        let mut extensions = std::collections::BTreeMap::new();
+        let resources = build_resources(self.resources, &self.state)?;
+        let prompts = build_prompts(self.prompts, &self.state)?;
+
+        let mut extensions = BTreeMap::new();
         for ext in &self.extensions {
             let id = ext.id();
             if !extension::is_valid_id(id) || extensions.contains_key(id) {
@@ -279,8 +361,18 @@ impl ServerBuilder {
             extra: Map::new(),
         });
 
+        let has_completions = resources.templates.iter().any(|t| !t.completers.is_empty())
+            || prompts.registry.iter().any(|p| !p.completers.is_empty());
+        let has_resources = !resources.statics.is_empty() || !resources.templates.is_empty();
+        let has_prompts = !prompts.registry.is_empty();
         let capabilities = spec::ServerCapabilities {
             tools: Some(spec::ServerCapabilitiesTools { list_changed: None }),
+            resources: has_resources.then_some(spec::ServerCapabilitiesResources {
+                list_changed: None,
+                subscribe: None,
+            }),
+            prompts: has_prompts.then_some(spec::ServerCapabilitiesPrompts { list_changed: None }),
+            completions: has_completions.then(Map::new),
             extensions: (!extensions.is_empty()).then_some(extensions),
             ..spec::ServerCapabilities::default()
         };
@@ -308,6 +400,53 @@ impl ServerBuilder {
             ttl_ms: millis(self.list_ttl),
         };
         let tools_list = to_raw(&list).map_err(|e| BuildError::Serialize("tools/list", e))?;
+        let list_ttl_ms = millis(self.list_ttl);
+
+        let resources_list = if has_resources {
+            Some(
+                to_raw(&spec::ListResourcesResult {
+                    meta: result_meta.clone(),
+                    cache_scope: self.cache_scope,
+                    next_cursor: None,
+                    resources: resources.listed,
+                    result_type: COMPLETE.to_owned(),
+                    ttl_ms: list_ttl_ms,
+                })
+                .map_err(|e| BuildError::Serialize("resources/list", e))?,
+            )
+        } else {
+            None
+        };
+        let templates_list = if has_resources {
+            Some(
+                to_raw(&spec::ListResourceTemplatesResult {
+                    meta: result_meta.clone(),
+                    cache_scope: self.cache_scope,
+                    next_cursor: None,
+                    resource_templates: resources.listed_templates,
+                    result_type: COMPLETE.to_owned(),
+                    ttl_ms: list_ttl_ms,
+                })
+                .map_err(|e| BuildError::Serialize("resources/templates/list", e))?,
+            )
+        } else {
+            None
+        };
+        let prompts_list = if has_prompts {
+            Some(
+                to_raw(&spec::ListPromptsResult {
+                    meta: result_meta.clone(),
+                    cache_scope: self.cache_scope,
+                    next_cursor: None,
+                    prompts: prompts.listed,
+                    result_type: COMPLETE.to_owned(),
+                    ttl_ms: list_ttl_ms,
+                })
+                .map_err(|e| BuildError::Serialize("prompts/list", e))?,
+            )
+        } else {
+            None
+        };
 
         let registry = tools
             .into_iter()
@@ -322,8 +461,15 @@ impl ServerBuilder {
         Ok(Server {
             inner: Arc::new(Inner {
                 tools: registry,
+                resources: resources.statics,
+                templates: resources.templates,
+                prompts: prompts.registry,
+                has_completions,
                 discover,
                 tools_list,
+                resources_list,
+                templates_list,
+                prompts_list,
                 result_meta,
                 supported_versions,
                 state: Arc::new(self.state),
@@ -346,8 +492,18 @@ pub struct Server {
 struct Inner {
     /// Sorted by name.
     tools: Box<[RegisteredTool]>,
+    /// Sorted by URI.
+    resources: Box<[RegisteredResource]>,
+    /// Sorted by name, then URI template; the first match wins.
+    templates: Box<[RegisteredTemplate]>,
+    /// Sorted by name.
+    prompts: Box<[RegisteredPrompt]>,
+    has_completions: bool,
     discover: Box<RawValue>,
     tools_list: Box<RawValue>,
+    resources_list: Option<Box<RawValue>>,
+    templates_list: Option<Box<RawValue>>,
+    prompts_list: Option<Box<RawValue>>,
     result_meta: Option<spec::ResultMetaObject>,
     supported_versions: Vec<String>,
     state: Arc<TypeMap>,
@@ -361,12 +517,219 @@ struct RegisteredTool {
     mirrored: Vec<MirroredParam>,
 }
 
+struct RegisteredResource {
+    uri: String,
+    read: ReadFn,
+    ttl_ms: u64,
+    cache_scope: CacheScope,
+}
+
+struct RegisteredTemplate {
+    template: UriTemplate,
+    read: ReadFn,
+    ttl_ms: u64,
+    cache_scope: CacheScope,
+    completers: Vec<Completer>,
+}
+
+struct RegisteredPrompt {
+    name: String,
+    description: Option<String>,
+    get: GetFn,
+    completers: Vec<Completer>,
+}
+
+struct BuiltResources {
+    statics: Box<[RegisteredResource]>,
+    templates: Box<[RegisteredTemplate]>,
+    listed: Vec<spec::Resource>,
+    listed_templates: Vec<spec::ResourceTemplate>,
+}
+
+struct BuiltPrompts {
+    registry: Box<[RegisteredPrompt]>,
+    listed: Vec<spec::Prompt>,
+}
+
+fn check_state(
+    state: &TypeMap,
+    required: &[StateRequirement],
+    handler: &str,
+) -> Result<(), BuildError> {
+    match required.iter().find(|r| !state.contains(r.type_id)) {
+        Some(missing) => Err(BuildError::MissingState {
+            handler: handler.to_owned(),
+            type_name: missing.type_name,
+        }),
+        None => Ok(()),
+    }
+}
+
+fn check_completers(
+    completers: &[Completer],
+    owner: &str,
+    arguments: &[&str],
+) -> Result<(), BuildError> {
+    match completers
+        .iter()
+        .find(|c| !arguments.contains(&c.argument.as_str()))
+    {
+        Some(unknown) => Err(BuildError::InvalidCompletion {
+            owner: owner.to_owned(),
+            argument: unknown.argument.clone(),
+        }),
+        None => Ok(()),
+    }
+}
+
+fn build_resources(defs: Vec<ResourceDef>, state: &TypeMap) -> Result<BuiltResources, BuildError> {
+    let mut statics = Vec::new();
+    let mut templates = Vec::new();
+    let mut listed = Vec::new();
+    let mut listed_templates = Vec::new();
+    for def in defs {
+        check_state(state, &def.required_state, def.uri())?;
+        let ttl_ms = millis(def.ttl);
+        match def.kind {
+            ResourceKind::Static(resource) => {
+                if !uri_template::is_absolute_uri(&resource.uri) {
+                    return Err(BuildError::InvalidResource {
+                        uri: resource.uri,
+                        reason: "expected an absolute URI such as `scheme://path`".to_owned(),
+                    });
+                }
+                check_completers(&def.completers, &resource.uri, &[])?;
+                statics.push(RegisteredResource {
+                    uri: resource.uri.clone(),
+                    read: def.read,
+                    ttl_ms,
+                    cache_scope: def.cache_scope,
+                });
+                listed.push(resource);
+            }
+            ResourceKind::Template(template) => {
+                let parsed = UriTemplate::parse(&template.uri_template).map_err(|e| {
+                    BuildError::InvalidResource {
+                        uri: template.uri_template.clone(),
+                        reason: e.to_string(),
+                    }
+                })?;
+                let variables: Vec<&str> = parsed.variables().collect();
+                check_completers(&def.completers, &template.uri_template, &variables)?;
+                templates.push((
+                    template.name.clone(),
+                    RegisteredTemplate {
+                        template: parsed,
+                        read: def.read,
+                        ttl_ms,
+                        cache_scope: def.cache_scope,
+                        completers: def.completers,
+                    },
+                ));
+                listed_templates.push(template);
+            }
+        }
+    }
+    statics.sort_by(|a, b| a.uri.cmp(&b.uri));
+    if let Some(pair) = statics
+        .windows(2)
+        .find(|w| matches!(w, [a, b] if a.uri == b.uri))
+        && let Some(first) = pair.first()
+    {
+        return Err(BuildError::DuplicateResource(first.uri.clone()));
+    }
+    listed.sort_by(|a, b| a.uri.cmp(&b.uri));
+    templates.sort_by(|(na, a), (nb, b)| {
+        na.cmp(nb)
+            .then_with(|| a.template.as_str().cmp(b.template.as_str()))
+    });
+    for (i, (_, t)) in templates.iter().enumerate() {
+        if templates
+            .iter()
+            .skip(i + 1)
+            .any(|(_, other)| other.template.as_str() == t.template.as_str())
+        {
+            return Err(BuildError::DuplicateResource(
+                t.template.as_str().to_owned(),
+            ));
+        }
+    }
+    listed_templates.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.uri_template.cmp(&b.uri_template))
+    });
+    Ok(BuiltResources {
+        statics: statics.into(),
+        templates: templates.into_iter().map(|(_, t)| t).collect(),
+        listed,
+        listed_templates,
+    })
+}
+
+fn build_prompts(mut defs: Vec<PromptDef>, state: &TypeMap) -> Result<BuiltPrompts, BuildError> {
+    defs.sort_by(|a, b| a.prompt.name.cmp(&b.prompt.name));
+    if let Some(pair) = defs
+        .windows(2)
+        .find(|w| matches!(w, [a, b] if a.prompt.name == b.prompt.name))
+        && let Some(first) = pair.first()
+    {
+        return Err(BuildError::DuplicatePrompt(first.prompt.name.clone()));
+    }
+    let mut registry = Vec::with_capacity(defs.len());
+    let mut listed = Vec::with_capacity(defs.len());
+    for def in defs {
+        let name = &def.prompt.name;
+        if name.is_empty() || name.chars().any(char::is_control) {
+            return Err(BuildError::InvalidPromptName(name.clone()));
+        }
+        check_state(state, &def.required_state, name)?;
+        let arguments: Vec<&str> = def
+            .prompt
+            .arguments
+            .iter()
+            .flatten()
+            .map(|a| a.name.as_str())
+            .collect();
+        check_completers(&def.completers, name, &arguments)?;
+        registry.push(RegisteredPrompt {
+            name: name.clone(),
+            description: def.prompt.description.clone(),
+            get: def.get,
+            completers: def.completers,
+        });
+        listed.push(def.prompt);
+    }
+    Ok(BuiltPrompts {
+        registry: registry.into(),
+        listed,
+    })
+}
+
 impl std::fmt::Debug for Server {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Server")
             .field(
                 "tools",
                 &self.inner.tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
+            )
+            .field(
+                "resources",
+                &self
+                    .inner
+                    .resources
+                    .iter()
+                    .map(|r| &r.uri)
+                    .collect::<Vec<_>>(),
+            )
+            .field(
+                "prompts",
+                &self
+                    .inner
+                    .prompts
+                    .iter()
+                    .map(|p| &p.name)
+                    .collect::<Vec<_>>(),
             )
             .field("limits", &self.inner.limits)
             .finish_non_exhaustive()
@@ -490,20 +853,41 @@ impl Server {
                 self.validate_meta(p.meta)?;
                 Ok(Some(self.inner.discover.clone()))
             }
-            methods::TOOLS_LIST => {
-                let p: ListParams<'_> = parse_params(params)?;
-                self.validate_meta(p.meta)?;
-                if p.cursor.is_some() {
-                    // The whole list fits in one page, so no cursor is valid.
-                    return Err(McpError::invalid_params("Invalid cursor"));
-                }
-                Ok(Some(self.inner.tools_list.clone()))
-            }
+            methods::TOOLS_LIST => self.list(&req.method, params, Some(&*self.inner.tools_list)),
             methods::TOOLS_CALL => {
                 let p: CallParams<'_> = parse_params(params)?;
                 let meta = self.validate_meta(p.meta)?;
-                self.call_tool(req.id, &p.name, p.arguments, meta, transport, cancellation)
+                let ctx = self.ctx(req.id, meta, &cancellation, transport);
+                self.call_tool(&p.name, p.arguments, ctx, &cancellation)
                     .await
+            }
+            methods::RESOURCES_LIST => {
+                self.list(&req.method, params, self.inner.resources_list.as_deref())
+            }
+            methods::RESOURCES_TEMPLATES_LIST => {
+                self.list(&req.method, params, self.inner.templates_list.as_deref())
+            }
+            methods::RESOURCES_READ if self.inner.resources_list.is_some() => {
+                let p: ReadParams<'_> = parse_params(params)?;
+                let meta = self.validate_meta(p.meta)?;
+                let ctx = self.ctx(req.id, meta, &cancellation, transport);
+                self.read_resource(&p.uri, ctx, &cancellation).await
+            }
+            methods::PROMPTS_LIST => {
+                self.list(&req.method, params, self.inner.prompts_list.as_deref())
+            }
+            methods::PROMPTS_GET if self.inner.prompts_list.is_some() => {
+                let p: GetPromptParams = parse_params(params)?;
+                let meta = self.validate_meta(p.meta)?;
+                let ctx = self.ctx(req.id, meta, &cancellation, transport);
+                let arguments = PromptArguments::new(p.arguments.unwrap_or_default());
+                self.get_prompt(&p.name, &arguments, ctx, &cancellation)
+                    .await
+            }
+            methods::COMPLETION_COMPLETE if self.inner.has_completions => {
+                let mut p: CompleteParams = parse_params(params)?;
+                self.validate_meta(p.meta.take())?;
+                self.complete(p).map(Some)
             }
             "initialize" => Err(McpError::method_not_found_explained(format!(
                 "This server implements the stateless MCP protocol (versions: {}); \
@@ -512,6 +896,26 @@ impl Server {
             ))),
             other => Err(McpError::method_not_found(other)),
         }
+    }
+
+    /// Answers a list request from its pre-serialized body. `None` means the
+    /// server does not offer this kind of item.
+    fn list(
+        &self,
+        method: &str,
+        params: Option<&RawValue>,
+        body: Option<&RawValue>,
+    ) -> Result<Option<Box<RawValue>>, McpError> {
+        let Some(body) = body else {
+            return Err(McpError::method_not_found(method));
+        };
+        let p: ListParams<'_> = parse_params(params)?;
+        self.validate_meta(p.meta)?;
+        if p.cursor.is_some() {
+            // Every list fits in one page, so no cursor is valid.
+            return Err(McpError::invalid_params("Invalid cursor"));
+        }
+        Ok(Some(body.to_owned()))
     }
 
     fn validate_meta(
@@ -542,47 +946,73 @@ impl Server {
         })
     }
 
-    async fn call_tool(
+    fn ctx(
         &self,
         id: RequestId,
-        name: &str,
-        arguments: Option<&RawValue>,
         meta: RequestMeta,
+        cancellation: &CancellationToken,
         transport: TransportContext,
-        cancellation: CancellationToken,
-    ) -> Result<Option<Box<RawValue>>, McpError> {
-        let tool = self
-            .find_tool(name)
-            .ok_or_else(|| McpError::unknown_tool(name))?;
-
-        let ctx = Ctx::new(
+    ) -> Ctx {
+        Ctx::new(
             id,
             meta,
             cancellation.clone(),
             transport,
             Arc::clone(&self.inner.state),
-        );
+        )
+    }
+
+    /// Runs a handler future under the concurrency limit, the timeout and
+    /// panic isolation. `Ok(None)` means the request was cancelled.
+    async fn run<T>(
+        &self,
+        future: Pin<Box<dyn Future<Output = Result<T, ToolError>> + Send>>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<Result<T, ToolError>>, McpError> {
+        // Bound concurrency; the semaphore is never closed.
+        let Ok(_permit) = self.inner.permits.acquire().await else {
+            return Err(McpError::internal());
+        };
+        let guarded = std::panic::AssertUnwindSafe(future).catch_unwind();
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => Ok(None),
+            timed = tokio::time::timeout(self.inner.limits.tool_timeout, guarded) => {
+                Ok(Some(match timed {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(_panic)) => Err(ToolError::panicked()),
+                    Err(_elapsed) => Err(ToolError::timeout()),
+                }))
+            }
+        }
+    }
+
+    fn with_server_info(&self, meta: &mut Option<spec::ResultMetaObject>) {
+        if let Some(server_meta) = &self.inner.result_meta {
+            match meta {
+                Some(meta) => meta.server_info.clone_from(&server_meta.server_info),
+                None => *meta = Some(server_meta.clone()),
+            }
+        }
+    }
+
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: Option<&RawValue>,
+        ctx: Ctx,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<Box<RawValue>>, McpError> {
+        let tool = self
+            .find_tool(name)
+            .ok_or_else(|| McpError::unknown_tool(name))?;
 
         let outcome = match (tool.call)(arguments, ctx) {
             Err(error) => Err(error),
-            Ok(future) => {
-                // Bound concurrency; the semaphore is never closed.
-                let Ok(_permit) = self.inner.permits.acquire().await else {
-                    return Err(McpError::internal());
-                };
-                let guarded = std::panic::AssertUnwindSafe(future).catch_unwind();
-                tokio::select! {
-                    biased;
-                    () = cancellation.cancelled() => return Ok(None),
-                    timed = tokio::time::timeout(self.inner.limits.tool_timeout, guarded) => {
-                        match timed {
-                            Ok(Ok(result)) => result,
-                            Ok(Err(_panic)) => Err(crate::tool::ToolError::panicked()),
-                            Err(_elapsed) => Err(crate::tool::ToolError::timeout()),
-                        }
-                    }
-                }
-            }
+            Ok(future) => match self.run(future, cancellation).await? {
+                None => return Ok(None),
+                Some(outcome) => outcome,
+            },
         };
 
         let mut result = match outcome {
@@ -593,14 +1023,134 @@ impl Server {
             },
         };
         result.result_type = COMPLETE.to_owned();
-        if let Some(server_meta) = &self.inner.result_meta {
-            match &mut result.meta {
-                Some(meta) => meta.server_info.clone_from(&server_meta.server_info),
-                None => result.meta = Some(server_meta.clone()),
-            }
-        }
+        self.with_server_info(&mut result.meta);
         to_raw(&result).map(Some).map_err(|error| {
             tracing::error!(tool = %tool.name, %error, "failed to serialize tool result");
+            McpError::internal()
+        })
+    }
+
+    /// Finds the handler for a URI: an exact static resource first, then the
+    /// first matching template.
+    fn find_resource(&self, uri: &str) -> Option<(ReadFn, UriVars, u64, CacheScope)> {
+        if let Some(r) = self
+            .inner
+            .resources
+            .binary_search_by(|r| r.uri.as_str().cmp(uri))
+            .ok()
+            .and_then(|i| self.inner.resources.get(i))
+        {
+            return Some((r.read, UriVars::default(), r.ttl_ms, r.cache_scope));
+        }
+        self.inner.templates.iter().find_map(|t| {
+            t.template
+                .matches(uri)
+                .map(|vars| (t.read, vars, t.ttl_ms, t.cache_scope))
+        })
+    }
+
+    async fn read_resource(
+        &self,
+        uri: &str,
+        ctx: Ctx,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<Box<RawValue>>, McpError> {
+        let (read, vars, ttl_ms, cache_scope) = self
+            .find_resource(uri)
+            .ok_or_else(|| McpError::resource_not_found(uri))?;
+        let outcome = match read(uri, &vars, ctx) {
+            Err(error) => Err(error),
+            Ok(future) => match self.run(future, cancellation).await? {
+                None => return Ok(None),
+                Some(outcome) => outcome,
+            },
+        };
+        let contents = outcome.map_err(|e| e.into_rpc_error("resource", Some(uri)))?;
+        let mut result =
+            spec::ReadResourceResult::new(cache_scope, contents, COMPLETE.to_owned(), ttl_ms);
+        self.with_server_info(&mut result.meta);
+        to_raw(&result).map(Some).map_err(|error| {
+            tracing::error!(uri, %error, "failed to serialize resource contents");
+            McpError::internal()
+        })
+    }
+
+    fn find_prompt(&self, name: &str) -> Option<&RegisteredPrompt> {
+        self.inner
+            .prompts
+            .binary_search_by(|p| p.name.as_str().cmp(name))
+            .ok()
+            .and_then(|i| self.inner.prompts.get(i))
+    }
+
+    async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: &PromptArguments,
+        ctx: Ctx,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<Box<RawValue>>, McpError> {
+        let prompt = self
+            .find_prompt(name)
+            .ok_or_else(|| McpError::unknown_prompt(name))?;
+        let outcome = match (prompt.get)(arguments, ctx) {
+            Err(error) => Err(error),
+            Ok(future) => match self.run(future, cancellation).await? {
+                None => return Ok(None),
+                Some(outcome) => outcome,
+            },
+        };
+        let mut result = outcome.map_err(|e| e.into_rpc_error(&prompt.name, None))?;
+        result.result_type = COMPLETE.to_owned();
+        if result.description.is_none() {
+            result.description.clone_from(&prompt.description);
+        }
+        self.with_server_info(&mut result.meta);
+        to_raw(&result).map(Some).map_err(|error| {
+            tracing::error!(prompt = %prompt.name, %error, "failed to serialize prompt");
+            McpError::internal()
+        })
+    }
+
+    fn complete(&self, p: CompleteParams) -> Result<Box<RawValue>, McpError> {
+        let completers = match &p.reference {
+            CompletionRef::Prompt { name } => {
+                &self
+                    .find_prompt(name)
+                    .ok_or_else(|| McpError::unknown_prompt(name))?
+                    .completers
+            }
+            CompletionRef::Resource { uri } => {
+                &self
+                    .inner
+                    .templates
+                    .iter()
+                    .find(|t| t.template.as_str() == uri)
+                    .ok_or_else(|| McpError::resource_not_found(uri))?
+                    .completers
+            }
+        };
+        let context = p.context.and_then(|c| c.arguments).unwrap_or_default();
+        let request = CompletionRequest {
+            argument: &p.argument.name,
+            value: &p.argument.value,
+            context: &context,
+        };
+        let completion = match completers.iter().find(|c| c.argument == p.argument.name) {
+            Some(completer) => {
+                let complete = completer.complete;
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| complete(&request)))
+                    .map_err(|_panic| {
+                        tracing::error!(argument = %p.argument.name, "completion provider panicked");
+                        McpError::internal()
+                    })?
+            }
+            None => crate::completion::Completion::default(),
+        };
+        let mut result = spec::CompleteResult::new(completion.into_spec(), COMPLETE.to_owned());
+        self.with_server_info(&mut result.meta);
+        to_raw(&result).map_err(|error| {
+            tracing::error!(%error, "failed to serialize completion");
             McpError::internal()
         })
     }
@@ -642,6 +1192,55 @@ struct CallParams<'a> {
     name: String,
     #[serde(borrow, default)]
     arguments: Option<&'a RawValue>,
+}
+
+#[derive(Deserialize)]
+struct ReadParams<'a> {
+    #[serde(rename = "_meta", default)]
+    meta: Option<spec::RequestMetaObject>,
+    #[serde(borrow)]
+    uri: std::borrow::Cow<'a, str>,
+}
+
+#[derive(Deserialize)]
+struct GetPromptParams {
+    #[serde(rename = "_meta", default)]
+    meta: Option<spec::RequestMetaObject>,
+    name: String,
+    #[serde(default)]
+    arguments: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+struct CompleteParams {
+    #[serde(rename = "_meta", default)]
+    meta: Option<spec::RequestMetaObject>,
+    #[serde(rename = "ref")]
+    reference: CompletionRef,
+    argument: CompletionArgument,
+    #[serde(default)]
+    context: Option<CompletionContext>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum CompletionRef {
+    #[serde(rename = "ref/prompt")]
+    Prompt { name: String },
+    #[serde(rename = "ref/resource")]
+    Resource { uri: String },
+}
+
+#[derive(Deserialize)]
+struct CompletionArgument {
+    name: String,
+    value: String,
+}
+
+#[derive(Deserialize)]
+struct CompletionContext {
+    #[serde(default)]
+    arguments: Option<BTreeMap<String, String>>,
 }
 
 fn parse_params<'a, T: Deserialize<'a>>(params: Option<&'a RawValue>) -> Result<T, McpError> {

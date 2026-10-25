@@ -14,7 +14,7 @@ publish.workspace = true
 all-features = true
 
 [dependencies]
-base64 = { workspace = true, optional = true }
+base64.workspace = true
 bytes = { workspace = true, optional = true }
 futures-util.workspace = true
 http = { workspace = true, optional = true }
@@ -39,7 +39,6 @@ default = []
 stdio = ["tokio/io-std", "tokio/io-util", "tokio/rt"]
 ## Streamable HTTP (stateless) as a tower service, plus a hyper-based server.
 http = [
-    "dep:base64",
     "dep:bytes",
     "dep:http",
     "dep:http-body",

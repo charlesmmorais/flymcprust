@@ -1,0 +1,5 @@
+error: URI template variable `field` has no matching parameter
+ --> tests/ui/resource_missing_variable.rs:4:4
+  |
+4 | fn user(id: u64) -> String {
+  |    ^^^^

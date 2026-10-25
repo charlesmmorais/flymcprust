@@ -1,0 +1,5 @@
+error: `cache` must be "public" or "private"
+ --> tests/ui/resource_bad_cache.rs:3:36
+  |
+3 | #[resource("config://app", cache = "shared")]
+  |                                    ^^^^^^^^

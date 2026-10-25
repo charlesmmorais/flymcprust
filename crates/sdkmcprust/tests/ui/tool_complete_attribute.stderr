@@ -1,0 +1,5 @@
+error: only doc comments, #[serde(..)] and #[schemars(..)] are allowed on #[tool] parameters
+ --> tests/ui/tool_complete_attribute.rs:4:9
+  |
+4 | fn echo(#[complete(values = ["a"])] text: String) -> String {
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^

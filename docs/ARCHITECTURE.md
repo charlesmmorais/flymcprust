@@ -459,7 +459,6 @@ exception to the safety rules is needed.
 | OAuth | A tower layer on the HTTP service populates `TransportContext`. Cache scope becomes `private` per authorization context. |
 | 2025-11-25 compatibility | §7.3 legacy adapter, plus a `spec::v2025_11_25` module. |
 | Tasks, MCP Apps | The extension trait (§6.6). Apps uses the `io.modelcontextprotocol/ui` identifier. |
-| Resources, prompts, completion | New routes and registries next to tools, sharing the same pipeline. |
 | Elicitation (MRTR) | `ToolOutput::InputRequired`, plus `Ctx` helpers and sealed `requestState`. |
 | Subscriptions (`subscriptions/listen`) | A long-lived response stream. Uses the SSE path on HTTP and `subscriptionId` tagging on stdio. |
 | WASM target | `spec` is already I/O-free. `core` gates `tokio` behind features. |
@@ -474,4 +473,9 @@ exception to the safety rules is needed.
 | 2026-10-25 | Generated schemas drop schemars' non-standard numeric `format` values (`uint`, `double`, …). They are not JSON Schema 2020-12 formats, clients warn about them (the MCP Inspector does), and they cost model context. |
 | 2026-10-25 | Tools can return protocol-level errors through `ToolError::protocol` and `ToolError::missing_client_capability`. The spec requires `-32021` (HTTP `400`), not an `isError` result, when a request needs an undeclared client capability. |
 | 2026-10-25 | Conformance is measured with `@modelcontextprotocol/conformance@0.2.0-alpha.12`, the first release with 2026-07-28 server scenarios (`latest` still targets 2025-11-25), against `examples/conformance-server` with a per-check baseline. |
+| 2026-10-25 | Phase 2 public API (chosen by the owner): resources and prompts are declared with `#[resource]` / `#[prompt]` macros consistent with `#[tool]`, with `ResourceDef` / `PromptDef` for registration by hand. |
+| 2026-10-25 | One error type, `ToolError`, for all handlers. For resources and prompts it maps to JSON-RPC errors: `user`/`invalid_argument` → `-32602` with the message, `not_found` → `-32602` with `data.uri` (the 2026-07-28 resource-not-found), internal/panic/timeout → `-32603` with a generic message. |
+| 2026-10-25 | URI templates support the RFC 6570 subset `{var}`, `{+var}`, `{/var}` and trailing `{?a,b}`. Matching is deterministic and linear (a variable ends at the first occurrence of the next literal, `{+var}` at the last), so ambiguous templates (adjacent variables, two `{+var}`) are rejected at build time, and URIs over 8 KiB never match. |
+| 2026-10-25 | `resources/read` defaults to `ttlMs: 0` and `cacheScope: "private"` (safe for per-caller data); lists keep the server-wide hints. Static resources are matched before templates; templates in name order, first match wins. |
+| 2026-10-25 | Completion providers are synchronous (`fn(&CompletionRequest) -> Completion`), attached with `#[complete(path)]` or `#[complete(values = [..])]`. Results are truncated to 100 values with `total`/`hasMore`. Methods for features the server does not offer (`resources/*`, `prompts/*`, `completion/complete`) answer `-32601`, matching the advertised capabilities. |
 | 2026-10-25 | Over HTTP, `initialize` skips header validation and gets `404` + `-32601` with a message naming the supported versions. The spec recommends that diagnostic for legacy clients and requires `404` for unimplemented methods. |

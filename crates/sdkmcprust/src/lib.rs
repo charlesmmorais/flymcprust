@@ -33,36 +33,39 @@
 //!
 //! | Feature | Default | Description |
 //! | --- | --- | --- |
-//! | `macros` | yes | The [`tool`] attribute macro. |
+//! | `macros` | yes | The [`tool`], [`resource`] and [`prompt`] attribute macros. |
 //! | `stdio` | no | stdio transport ([`Server::serve_stdio`]). |
 //! | `http` | no | Streamable HTTP transport ([`transport::http`]). |
-//! | `auto-register` | no | [`ServerBuilder::auto_tools`] collects every `#[tool]`. |
+//! | `auto-register` | no | [`ServerBuilder::auto_tools`] (and `auto_resources`, `auto_prompts`) collect every annotated item. |
 //! | `test-client` | no | In-process `testing::TestClient` for tests. |
 //!
 //! See the repository's `docs/ARCHITECTURE.md` for design decisions.
 #![forbid(unsafe_code)]
 
 pub use sdkmcprust_core::{
-    BuildError, Ctx, ErrorKind, Extension, IntoToolError, IntoToolResult, Json, Limits, McpError,
-    McpRequest, MirroredParam, ParamKind, Server, ServerBuilder, State, Tool, ToolDef, ToolError,
-    ToolOutput, ToolResult, TransportContext, jsonrpc, spec, transport,
+    BuildError, CompleteFn, Completion, CompletionRequest, Ctx, ErrorKind, Extension, IntoContent,
+    IntoPromptResult, IntoResourceContents, IntoToolError, IntoToolResult, Json, Limits, McpError,
+    McpRequest, MirroredParam, ParamKind, Prompt, PromptArguments, PromptDef, Resource,
+    ResourceContents, ResourceDef, Server, ServerBuilder, State, Tool, ToolDef, ToolError,
+    ToolOutput, ToolResult, TransportContext, UriTemplate, UriTemplateError, UriVars, jsonrpc,
+    message, spec, transport,
 };
 
 #[cfg(feature = "macros")]
-pub use sdkmcprust_macros::tool;
+pub use sdkmcprust_macros::{prompt, resource, tool};
 
 #[cfg(feature = "test-client")]
 pub use sdkmcprust_core::testing;
 
 /// The most common imports.
 pub mod prelude {
-    pub use crate::{Ctx, Json, Server, State, ToolError};
+    pub use crate::{Ctx, Json, Server, State, ToolError, message};
 
     #[cfg(feature = "macros")]
-    pub use crate::tool;
+    pub use crate::{prompt, resource, tool};
 }
 
-/// Implementation details used by `#[tool]`. Not part of the public API.
+/// Implementation details used by the macros. Not part of the public API.
 #[doc(hidden)]
 pub mod __private {
     pub use ::schemars;
@@ -71,12 +74,14 @@ pub mod __private {
     pub use serde_json::value::RawValue;
 
     pub use sdkmcprust_core::{
-        Ctx, IntoToolResult, Tool, ToolDef, ToolError, ToolFuture, input_schema_for,
-        output_schema_from, parse_arguments, spec,
+        Completion, CompletionRequest, Ctx, IntoPromptResult, IntoResourceContents, IntoToolResult,
+        Prompt, PromptArguments, PromptDef, PromptFuture, Resource, ResourceDef, ResourceFuture,
+        Tool, ToolDef, ToolError, ToolFuture, UriVars, input_schema_for, output_schema_from,
+        parse_arguments, parse_optional_uri_var, parse_uri_var, spec,
     };
 
     #[cfg(feature = "auto-register")]
-    pub use sdkmcprust_core::{__inventory as inventory, AutoTool};
+    pub use sdkmcprust_core::{__inventory as inventory, AutoPrompt, AutoResource, AutoTool};
 
     /// Error for a `State<T>` that was never registered. Unreachable in
     /// practice: `ServerBuilder::build` rejects such servers.

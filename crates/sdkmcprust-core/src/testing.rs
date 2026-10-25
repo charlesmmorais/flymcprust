@@ -114,6 +114,106 @@ impl TestClient {
         .await
     }
 
+    /// Calls `resources/list`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ClientError`] for JSON-RPC errors or undecodable results.
+    pub async fn list_resources(&self) -> Result<spec::ListResourcesResult, ClientError> {
+        self.request(methods::RESOURCES_LIST, json!({})).await
+    }
+
+    /// Calls `resources/templates/list`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ClientError`] for JSON-RPC errors or undecodable results.
+    pub async fn list_resource_templates(
+        &self,
+    ) -> Result<spec::ListResourceTemplatesResult, ClientError> {
+        self.request(methods::RESOURCES_TEMPLATES_LIST, json!({}))
+            .await
+    }
+
+    /// Calls `resources/read`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ClientError`] for JSON-RPC errors (including
+    /// resource-not-found) or undecodable results.
+    pub async fn read_resource(&self, uri: &str) -> Result<spec::ReadResourceResult, ClientError> {
+        self.request(methods::RESOURCES_READ, json!({ "uri": uri }))
+            .await
+    }
+
+    /// Calls `prompts/list`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ClientError`] for JSON-RPC errors or undecodable results.
+    pub async fn list_prompts(&self) -> Result<spec::ListPromptsResult, ClientError> {
+        self.request(methods::PROMPTS_LIST, json!({})).await
+    }
+
+    /// Calls `prompts/get` with string arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ClientError`] for JSON-RPC errors or undecodable results.
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Value,
+    ) -> Result<spec::GetPromptResult, ClientError> {
+        self.request(
+            methods::PROMPTS_GET,
+            json!({ "name": name, "arguments": arguments }),
+        )
+        .await
+    }
+
+    /// Calls `completion/complete` for a prompt argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ClientError`] for JSON-RPC errors or undecodable results.
+    pub async fn complete_prompt(
+        &self,
+        prompt: &str,
+        argument: &str,
+        value: &str,
+    ) -> Result<spec::CompleteResult, ClientError> {
+        self.request(
+            methods::COMPLETION_COMPLETE,
+            json!({
+                "ref": { "type": "ref/prompt", "name": prompt },
+                "argument": { "name": argument, "value": value },
+            }),
+        )
+        .await
+    }
+
+    /// Calls `completion/complete` for a resource-template variable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ClientError`] for JSON-RPC errors or undecodable results.
+    pub async fn complete_resource(
+        &self,
+        uri_template: &str,
+        variable: &str,
+        value: &str,
+    ) -> Result<spec::CompleteResult, ClientError> {
+        self.request(
+            methods::COMPLETION_COMPLETE,
+            json!({
+                "ref": { "type": "ref/resource", "uri": uri_template },
+                "argument": { "name": variable, "value": value },
+            }),
+        )
+        .await
+    }
+
     /// Sends any request; `_meta` is added to `params` unless present.
     ///
     /// # Errors

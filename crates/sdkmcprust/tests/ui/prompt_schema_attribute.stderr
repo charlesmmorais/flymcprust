@@ -1,0 +1,5 @@
+error: only doc comments and #[complete(..)] are allowed on #[prompt] parameters
+ --> tests/ui/prompt_schema_attribute.rs:4:10
+  |
+4 | fn greet(#[serde(default)] name: String) -> String {
+  |          ^^^^^^^^^^^^^^^^^

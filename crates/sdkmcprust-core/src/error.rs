@@ -109,6 +109,47 @@ impl McpError {
         )
     }
 
+    /// `-32602`: a well-formed request the handler refused, with a
+    /// client-safe message (for example a `ToolError::user` raised while
+    /// reading a resource or getting a prompt).
+    #[must_use]
+    pub fn request_failed(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(
+            error_codes::INVALID_PARAMS_ERROR,
+            ErrorKind::Failed,
+            message,
+        )
+    }
+
+    /// `-32602` with `data.uri`: the resource does not exist (the
+    /// 2026-07-28 code for resource-not-found).
+    #[must_use]
+    pub fn resource_not_found(uri: &str) -> Self {
+        let mut err = Self::new(
+            error_codes::INVALID_PARAMS_ERROR,
+            ErrorKind::Failed,
+            format!("Resource not found: {}", truncate(uri)),
+        );
+        err.data = Some(Box::new(json!({ "uri": uri })));
+        err
+    }
+
+    /// `-32602`: the requested prompt does not exist.
+    #[must_use]
+    pub fn unknown_prompt(name: &str) -> Self {
+        Self::new(
+            error_codes::INVALID_PARAMS_ERROR,
+            ErrorKind::Failed,
+            format!("Unknown prompt: {}", truncate(name)),
+        )
+    }
+
+    /// `-32603` with a client-safe message (no internal details).
+    #[must_use]
+    pub fn internal_with_message(message: &'static str) -> Self {
+        Self::new(error_codes::INTERNAL_ERROR, ErrorKind::Internal, message)
+    }
+
     /// `-32603`: a generic internal error. Details must be logged, not sent.
     #[must_use]
     pub fn internal() -> Self {

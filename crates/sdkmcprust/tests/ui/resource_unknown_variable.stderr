@@ -1,0 +1,5 @@
+error: parameter `name` is not a variable of the URI template
+ --> tests/ui/resource_unknown_variable.rs:4:9
+  |
+4 | fn user(name: String) -> String {
+  |         ^^^^
