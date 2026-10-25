@@ -72,7 +72,7 @@ The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) can
 call the tool from the command line:
 
 ```bash
-npx @modelcontextprotocol/inspector --cli target/debug/hello-mcp --protocol-era modern --method tools/call --tool-name hello --tool-args-json '{"name":"Ada"}'
+npx @modelcontextprotocol/inspector --cli target/debug/hello-mcp --method tools/call --tool-name hello --tool-args-json '{"name":"Ada"}'
 ```
 
 ```json
@@ -83,8 +83,9 @@ npx @modelcontextprotocol/inspector --cli target/debug/hello-mcp --protocol-era 
 
 (The output also carries `_meta` with your server's name and version.)
 
-`--protocol-era modern` makes the Inspector speak MCP 2026-07-28, the
-version this SDK implements. On Windows, use `target\debug\hello-mcp.exe`.
+Your server speaks MCP 2026-07-28 and, for clients that have not moved yet,
+2025-11-25 and 2025-06-18 (the Inspector's default); nothing to configure.
+On Windows, use `target\debug\hello-mcp.exe`.
 Run `npx @modelcontextprotocol/inspector` without `--cli` for the web UI.
 
 ## 4. Add a resource, a prompt and a question for the user (1 minute)
@@ -166,11 +167,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Rebuild with `cargo build`, then read the resource and get the prompt:
 
 ```bash
-npx @modelcontextprotocol/inspector --cli target/debug/hello-mcp --protocol-era modern --method resources/read --uri config://style
+npx @modelcontextprotocol/inspector --cli target/debug/hello-mcp --method resources/read --uri config://style
 ```
 
 ```bash
-npx @modelcontextprotocol/inspector --cli target/debug/hello-mcp --protocol-era modern --method prompts/get --prompt-name welcome --prompt-args name=Ada
+npx @modelcontextprotocol/inspector --cli target/debug/hello-mcp --method prompts/get --prompt-name welcome --prompt-args name=Ada
 ```
 
 `ctx.elicit` asks the user through the client: the client shows a form
@@ -238,13 +239,9 @@ Most clients take a command to start. For example, in Claude Desktop's
 }
 ```
 
-The client must support MCP **2026-07-28**. If it only speaks an older
-version, it opens with `initialize`, and your server's log explains it:
-
-```text
-WARN a client tried to connect with `initialize` (MCP 2025-11-25 or older); this server speaks 2026-07-28 only
-  = help: use a client that supports MCP 2026-07-28 (the MCP Inspector needs `--protocol-era modern`); support for older clients is planned (docs/ROADMAP.md)
-```
+Clients on MCP 2026-07-28, 2025-11-25 or 2025-06-18 all work; the SDK adapts
+the protocol, including `ctx.elicit`, which older clients receive as a request
+from the server.
 
 ## When something goes wrong
 

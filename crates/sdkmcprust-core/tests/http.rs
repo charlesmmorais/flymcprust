@@ -141,7 +141,8 @@ async fn successful_request_returns_json() {
 
 #[tokio::test]
 async fn legacy_initialize_names_the_supported_versions() {
-    // A 2025-11-25 client opens with `initialize` and no modern headers.
+    // With legacy clients turned off, a 2025-11-25 client's `initialize`
+    // gets an error that names the supported versions.
     let body = json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
         "protocolVersion": "2025-11-25", "capabilities": {},
         "clientInfo": { "name": "legacy", "version": "1" } } });
@@ -153,7 +154,11 @@ async fn legacy_initialize_names_the_supported_versions() {
         .header("accept", "application/json, text/event-stream")
         .body(Full::new(Bytes::from(body.to_string())))
         .unwrap();
-    let (status, _, response) = send(&mut service(), request).await;
+    let strict = Server::builder("strict", "1")
+        .legacy_clients(false)
+        .build()
+        .unwrap();
+    let (status, _, response) = send(&mut StreamableHttpService::new(strict), request).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let response = response.unwrap();
     assert_eq!(response["error"]["code"], -32601);

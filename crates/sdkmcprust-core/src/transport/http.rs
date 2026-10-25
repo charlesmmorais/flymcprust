@@ -17,9 +17,17 @@
 //! 6. The message is dispatched; notifications get `202`, unknown methods
 //!    `404`, malformed requests `400`, everything else `200`.
 //!
-//! `Mcp-Session-Id` and `Last-Event-ID` are ignored: the protocol is
-//! stateless and streams are not resumable. Dropping the response future
-//! (client disconnect) cancels the request.
+//! `Last-Event-ID` is ignored: streams are not resumable. Dropping the
+//! response future (client disconnect) cancels a 2026-07-28 request.
+//!
+//! Legacy clients (2025-11-25, 2025-06-18) open with `initialize` and get a
+//! signed `MCP-Session-Id` that carries what they declared, so any instance
+//! sharing the `request_state_key` serves them without server-side session
+//! state. Their requests skip the 2026-07-28 header checks. When a handler
+//! asks for input, the response becomes an SSE stream carrying the
+//! server-to-client request; the client answers with a POST that is routed
+//! back to the waiting handler. `DELETE` gets `405`: sessions end when their
+//! token expires.
 
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -40,24 +48,76 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::value::RawValue;
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::context::TransportContext;
 use crate::error::{ErrorKind, McpError};
 use crate::hints::{self, Once};
 use crate::jsonrpc::{self, Message, Rejection, Response as RpcResponse};
+use crate::legacy::{self, ChannelPeer, LegacySession, PendingRequests};
 use crate::mirror::ParamKind;
 use crate::server::{McpRequest, Server};
 use crate::spec::{RequestId, methods};
 
-/// The HTTP response body type.
-pub type HttpBody = Full<Bytes>;
+/// The HTTP response body: a complete JSON body, or an SSE stream (legacy
+/// clients asked for input).
+pub struct HttpBody(BodyKind);
+
+enum BodyKind {
+    Full(Full<Bytes>),
+    Stream(Pin<Box<dyn Body<Data = Bytes, Error = Infallible> + Send>>),
+}
+
+impl HttpBody {
+    fn full(bytes: impl Into<Bytes>) -> Self {
+        Self(BodyKind::Full(Full::new(bytes.into())))
+    }
+}
+
+impl std::fmt::Debug for HttpBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            BodyKind::Full(_) => f.write_str("HttpBody::Full"),
+            BodyKind::Stream(_) => f.write_str("HttpBody::Stream"),
+        }
+    }
+}
+
+impl Body for HttpBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Bytes>, Infallible>>> {
+        match &mut self.get_mut().0 {
+            BodyKind::Full(body) => Pin::new(body).poll_frame(cx),
+            BodyKind::Stream(body) => body.as_mut().poll_frame(cx),
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        match &self.0 {
+            BodyKind::Full(body) => body.is_end_stream(),
+            BodyKind::Stream(body) => body.is_end_stream(),
+        }
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        match &self.0 {
+            BodyKind::Full(body) => body.size_hint(),
+            BodyKind::Stream(body) => body.size_hint(),
+        }
+    }
+}
 
 const MCP_PROTOCOL_VERSION: &str = "mcp-protocol-version";
 const MCP_METHOD: &str = "mcp-method";
 const MCP_NAME: &str = "mcp-name";
 const MCP_PARAM_PREFIX: &str = "mcp-param-";
+const MCP_SESSION_ID: &str = "mcp-session-id";
 const BASE64_PREFIX: &str = "=?base64?";
 const BASE64_SUFFIX: &str = "?=";
 const ALLOWED_REQUEST_HEADERS: &str =
@@ -177,6 +237,8 @@ pub struct StreamableHttpService {
     config: Arc<HttpConfig>,
     in_flight: Arc<Semaphore>,
     hints: Arc<Hints>,
+    /// Server-to-client requests of legacy sessions awaiting an answer.
+    pending: Arc<PendingRequests>,
 }
 
 /// Which developer hints were already logged.
@@ -187,6 +249,7 @@ struct Hints {
     busy: Once,
     slow_body: Once,
     too_large: Once,
+    session: Once,
 }
 
 impl StreamableHttpService {
@@ -204,6 +267,7 @@ impl StreamableHttpService {
             in_flight: Arc::new(Semaphore::new(config.max_in_flight)),
             config: Arc::new(config),
             hints: Arc::default(),
+            pending: Arc::default(),
         }
     }
 
@@ -303,7 +367,7 @@ impl StreamableHttpService {
         }
 
         // Bounds the memory held by bodies being read or processed.
-        let Ok(_permit) = Arc::clone(&self.in_flight).try_acquire_owned() else {
+        let Ok(permit) = Arc::clone(&self.in_flight).try_acquire_owned() else {
             hints::warn_once(
                 &self.hints.busy,
                 format_args!(
@@ -369,10 +433,32 @@ impl StreamableHttpService {
             }
         };
 
+        // Legacy clients: a session token, or a legacy version header.
+        let legacy = match self.legacy_session(&parts.headers) {
+            Ok(legacy) => legacy,
+            Err(response) => return *response,
+        };
+
         let message = match jsonrpc::parse(&bytes, limits) {
             Ok(message) => message,
             Err(Rejection::Error { id, error }) => {
                 return rpc_error(status_for(&error), id, &error, cors.as_ref());
+            }
+            Err(Rejection::UnexpectedResponse) if legacy.is_some() => {
+                // A legacy client answering one of our requests.
+                let owner = session_owner(&parts.headers);
+                let routed = jsonrpc::parse_client_response(&bytes)
+                    .is_some_and(|response| self.pending.complete(response, owner));
+                return if routed {
+                    plain(StatusCode::ACCEPTED, cors.as_ref())
+                } else {
+                    rpc_error(
+                        StatusCode::BAD_REQUEST,
+                        None,
+                        &McpError::invalid_request("The response answers no pending request"),
+                        cors.as_ref(),
+                    )
+                };
             }
             Err(Rejection::UnexpectedResponse) => {
                 return rpc_error(
@@ -383,6 +469,46 @@ impl StreamableHttpService {
                 );
             }
         };
+
+        // A body that declares 2026-07-28 in `_meta` follows 2026-07-28 rules
+        // (including header/body agreement), whatever its version header.
+        let legacy = legacy.filter(|_| {
+            parts.headers.contains_key(MCP_SESSION_ID) || !declares_modern_meta(&message)
+        });
+
+        // `initialize` opens a legacy session, unless the request declares
+        // 2026-07-28 (legacy clients never send the version header with
+        // `initialize`): for that protocol the method does not exist.
+        let modern = parts
+            .headers
+            .get(MCP_PROTOCOL_VERSION)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| self.server.supported_versions().iter().any(|s| s == v));
+        if let Message::Request(request) = &message
+            && request.method == "initialize"
+        {
+            if self.server.legacy_clients_enabled() && !modern {
+                return self.legacy_initialize(request, cors.as_ref());
+            }
+            if modern {
+                return rpc_error(
+                    StatusCode::NOT_FOUND,
+                    Some(request.id.clone()),
+                    &McpError::method_not_found_explained(
+                        "Method not found: `initialize` is not part of MCP 2026-07-28",
+                    ),
+                    cors.as_ref(),
+                );
+            }
+        }
+        if let Some(session) = legacy {
+            let mut transport = TransportContext::new();
+            let owner = session_owner(&parts.headers);
+            transport.insert(parts);
+            return self
+                .handle_legacy(message, session, owner, transport, permit, cors)
+                .await;
+        }
 
         // A legacy client's `initialize` carries none of the modern headers;
         // let the server answer it with an error naming the supported
@@ -418,6 +544,201 @@ impl StreamableHttpService {
             }
         }
     }
+}
+
+impl StreamableHttpService {
+    /// The legacy session of a request, if it is a legacy request. A token
+    /// that fails verification (or expired) gets `404`, which tells the
+    /// client to initialize again. A 2026-07-28 version header always means
+    /// a 2026-07-28 request.
+    #[allow(clippy::result_large_err)]
+    fn legacy_session(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<Option<LegacySession>, Box<Response<HttpBody>>> {
+        if !self.server.legacy_clients_enabled() {
+            return Ok(None);
+        }
+        let version = headers
+            .get(MCP_PROTOCOL_VERSION)
+            .and_then(|v| v.to_str().ok());
+        if version.is_some_and(|v| self.server.supported_versions().iter().any(|s| s == v)) {
+            return Ok(None);
+        }
+        match headers.get(MCP_SESSION_ID).and_then(|v| v.to_str().ok()) {
+            Some(token) => match self.server.open_session(token) {
+                Some(session) => Ok(Some(session)),
+                None => {
+                    hints::warn_once(
+                        &self.hints.session,
+                        format_args!("rejected an unknown or expired MCP-Session-Id (HTTP 404)"),
+                        "the client will initialize again; if this server runs as several \
+                         instances, give all of them the same ServerBuilder::request_state_key(..)",
+                    );
+                    Err(Box::new(rpc_error(
+                        StatusCode::NOT_FOUND,
+                        None,
+                        &McpError::invalid_request("Session not found or expired"),
+                        None,
+                    )))
+                }
+            },
+            None => Ok(version
+                .filter(|v| legacy::is_legacy_version(v))
+                .map(LegacySession::sessionless)),
+        }
+    }
+
+    fn legacy_initialize(
+        &self,
+        request: &jsonrpc::Request,
+        cors: Option<&HeaderValue>,
+    ) -> Response<HttpBody> {
+        match self.server.legacy_initialize(request.params.as_deref()) {
+            Ok((result, session)) => {
+                let body = RpcResponse::Result {
+                    id: request.id.clone(),
+                    result,
+                }
+                .to_vec();
+                let mut response = json(StatusCode::OK, body, cors);
+                if let Some(token) = self.server.seal_session(&session)
+                    && let Ok(value) = HeaderValue::from_str(&token)
+                {
+                    response.headers_mut().insert(MCP_SESSION_ID, value);
+                }
+                response
+            }
+            Err(error) => rpc_error(status_for(&error), Some(request.id.clone()), &error, cors),
+        }
+    }
+
+    /// Handles a legacy message. A request answers with JSON, or with an SSE
+    /// stream as soon as the handler asks the client for input.
+    async fn handle_legacy(
+        &self,
+        message: Message,
+        session: LegacySession,
+        owner: u64,
+        transport: TransportContext,
+        permit: OwnedSemaphorePermit,
+        cors: Option<HeaderValue>,
+    ) -> Response<HttpBody> {
+        let Message::Request(request) = message else {
+            // Notifications (`initialized`, `cancelled`) need no answer.
+            return plain(StatusCode::ACCEPTED, cors.as_ref());
+        };
+        let (out, mut outgoing) = mpsc::channel::<Vec<u8>>(8);
+        let (done, mut finished) = oneshot::channel::<Option<RpcResponse>>();
+        let peer = ChannelPeer {
+            pending: Arc::clone(&self.pending),
+            owner,
+            out,
+            timeout: self.server.limits().tool_timeout,
+        };
+        let server = self.server.clone();
+        tokio::spawn(async move {
+            let response = server
+                .handle_legacy(
+                    request,
+                    &session,
+                    transport,
+                    CancellationToken::new(),
+                    &peer,
+                )
+                .await;
+            drop(peer);
+            let _ = done.send(response);
+        });
+
+        // Wait for the result, or for the first request to the client. The
+        // request channel closes when the handler finishes without asking.
+        let reply = |response: Option<RpcResponse>| match response {
+            None => plain(StatusCode::ACCEPTED, cors.as_ref()),
+            Some(response) => {
+                let status = response.as_error().map_or(StatusCode::OK, status_for);
+                json(status, response.to_vec(), cors.as_ref())
+            }
+        };
+        let first = tokio::select! {
+            biased;
+            first = outgoing.recv() => first,
+            response = &mut finished => return reply(response.ok().flatten()),
+        };
+        let Some(first) = first else {
+            return reply(finished.await.ok().flatten());
+        };
+        let state = SseState {
+            first: Some(first),
+            outgoing,
+            finished: Some(finished),
+            _permit: permit,
+        };
+        let stream = futures_util::stream::unfold(state, |mut state| async move {
+            if let Some(message) = state.first.take() {
+                return Some((Ok(sse_event(&message)), state));
+            }
+            if let Some(message) = state.outgoing.recv().await {
+                return Some((Ok(sse_event(&message)), state));
+            }
+            // The handler finished: send its response and end the stream.
+            let response = state.finished.take()?.await.ok().flatten()?;
+            Some((Ok(sse_event(&response.to_vec())), state))
+        });
+        let body = http_body_util::StreamBody::new(stream);
+        let mut response = Response::new(HttpBody(BodyKind::Stream(Box::pin(body))));
+        let headers = response.headers_mut();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        );
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        headers.insert(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        );
+        with_cors(&mut response, cors.as_ref());
+        response
+    }
+}
+
+/// Whether a request's `_meta` carries the 2026-07-28 protocol version.
+fn declares_modern_meta(message: &Message) -> bool {
+    let Message::Request(request) = message else {
+        return false;
+    };
+    request.params.as_deref().is_some_and(|params| {
+        serde_json::from_str::<PeekParams<'_>>(params.get())
+            .ok()
+            .and_then(|p| p.meta)
+            .is_some_and(|meta| meta.protocol_version.is_some())
+    })
+}
+
+/// State of a legacy SSE response.
+struct SseState {
+    first: Option<Vec<u8>>,
+    outgoing: mpsc::Receiver<Vec<u8>>,
+    finished: Option<oneshot::Receiver<Option<RpcResponse>>>,
+    /// Counts against the in-flight limit until the stream ends.
+    _permit: OwnedSemaphorePermit,
+}
+
+fn sse_event(message: &[u8]) -> http_body::Frame<Bytes> {
+    let mut event = Vec::with_capacity(message.len() + 24);
+    event.extend_from_slice(b"event: message\ndata: ");
+    event.extend_from_slice(message);
+    event.extend_from_slice(b"\n\n");
+    http_body::Frame::data(Bytes::from(event))
+}
+
+/// Binds server-to-client requests to the session that caused them, so one
+/// client cannot answer another's.
+fn session_owner(headers: &HeaderMap) -> u64 {
+    use std::hash::{BuildHasher as _, BuildHasherDefault, DefaultHasher};
+    headers.get(MCP_SESSION_ID).map_or(0, |token| {
+        BuildHasherDefault::<DefaultHasher>::default().hash_one(token.as_bytes())
+    })
 }
 
 impl<B> tower_service::Service<Request<B>> for StreamableHttpService
@@ -866,14 +1187,14 @@ fn with_cors(response: &mut Response<HttpBody>, origin: Option<&HeaderValue>) {
 }
 
 fn plain(status: StatusCode, cors: Option<&HeaderValue>) -> Response<HttpBody> {
-    let mut response = Response::new(Full::new(Bytes::new()));
+    let mut response = Response::new(HttpBody::full(Bytes::new()));
     *response.status_mut() = status;
     with_cors(&mut response, cors);
     response
 }
 
 fn json(status: StatusCode, body: Vec<u8>, cors: Option<&HeaderValue>) -> Response<HttpBody> {
-    let mut response = Response::new(Full::new(Bytes::from(body)));
+    let mut response = Response::new(HttpBody::full(body));
     *response.status_mut() = status;
     response.headers_mut().insert(
         header::CONTENT_TYPE,

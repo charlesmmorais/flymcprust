@@ -196,6 +196,14 @@ impl McpError {
         err
     }
 
+    /// The same error with another code (used to adapt errors to older
+    /// protocol versions).
+    #[must_use]
+    pub(crate) fn with_code(mut self, code: i64) -> Self {
+        self.code = code;
+        self
+    }
+
     /// The JSON-RPC error code.
     #[must_use]
     pub fn code(&self) -> i64 {

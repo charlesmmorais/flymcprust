@@ -7,7 +7,8 @@
 round-trip requests over stdio and Streamable HTTP). Not published yet.
 
 - **Spec-first.** Targets MCP revision **2026-07-28**: stateless, with no
-  `initialize` and no sessions. Protocol types are generated from the official
+  `initialize` and no sessions. Clients of 2025-11-25 and 2025-06-18 work too,
+  without any change to your code. Protocol types are generated from the official
   `schema.json`/`schema.ts`, and deprecations become `#[deprecated]`.
 - **Ergonomic.** Tools, resources and prompts are plain (async) functions.
   Schemas, descriptions, arguments and annotations come from the signature
@@ -175,7 +176,7 @@ async fn deploy(ctx: Ctx, env: String) -> Result<String, ToolError> {
 | Multi round-trip requests: elicitation, sampling, roots; signed `requestState` | ✅ |
 | Progress and logging notifications, response streaming | Planned |
 | Subscriptions, Tasks, Apps, OAuth | Planned; the architecture already reserves their place ([ARCHITECTURE](docs/ARCHITECTURE.md) §12) |
-| 2025-11-25 (legacy) clients | Planned (transport-edge adapter). Today they get an error naming the supported versions |
+| 2025-11-25 and 2025-06-18 clients: `initialize`, `ping`, signed sessions, `ctx.elicit` as server-to-client requests (stdio and SSE) | ✅ (on by default; `legacy_clients(false)` turns it off) |
 
 ### Official conformance suite
 
@@ -205,6 +206,13 @@ built yet.
 | `dns-rebinding-protection` | 2/2 |
 | `tools-call-with-progress` | 1/2 (progress notifications) |
 
+The 2025-11-25 suite (older clients) passes **73 checks with 5 failures**, all
+in features not built yet: logging and progress notifications, and resource
+subscriptions ([`conformance-baseline-2025-11-25.yml`](conformance-baseline-2025-11-25.yml)).
+Initialization, sessions, ping, tools, resources, prompts, completion,
+elicitation and sampling (as server-to-client requests) and DNS-rebinding
+protection all pass.
+
 To reproduce locally, run `cargo run -p conformance-server`, then:
 
 ```bash
@@ -214,8 +222,8 @@ npx @modelcontextprotocol/conformance@0.2.0-alpha.12 server --url http://127.0.0
 ## Try it with the MCP Inspector
 
 The example server lives in [`examples/calculadora`](examples/calculadora).
-The MCP Inspector v2 needs `--protocol-era modern` to use the stateless
-protocol; its default is the legacy `initialize` handshake.
+The MCP Inspector speaks 2025-11-25 by default (add `--protocol-era modern`
+for 2026-07-28); the server answers both.
 
 ```bash
 cargo build -p calculadora
@@ -224,11 +232,11 @@ cargo build -p calculadora
 **stdio, CLI:**
 
 ```bash
-npx @modelcontextprotocol/inspector --cli target/debug/calculadora --protocol-era modern --method tools/list
+npx @modelcontextprotocol/inspector --cli target/debug/calculadora --method tools/list
 ```
 
 ```bash
-npx @modelcontextprotocol/inspector --cli target/debug/calculadora --protocol-era modern --method tools/call --tool-name divide --tool-args-json '{"a":10,"b":4}'
+npx @modelcontextprotocol/inspector --cli target/debug/calculadora --method tools/call --tool-name divide --tool-args-json '{"a":10,"b":4}'
 ```
 
 **Streamable HTTP:** start the server, then point the Inspector at it.
@@ -238,7 +246,7 @@ cargo run -p calculadora -- --http 127.0.0.1:8000
 ```
 
 ```bash
-npx @modelcontextprotocol/inspector --cli --transport http --server-url http://127.0.0.1:8000/mcp --protocol-era modern --method tools/list
+npx @modelcontextprotocol/inspector --cli --transport http --server-url http://127.0.0.1:8000/mcp --method tools/list
 ```
 
 **Web UI:** run `npx @modelcontextprotocol/inspector`. Add a server with

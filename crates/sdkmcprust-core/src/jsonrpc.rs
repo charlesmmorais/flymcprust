@@ -146,6 +146,39 @@ pub fn parse(bytes: &[u8], limits: &Limits) -> Result<Message, Rejection> {
     })
 }
 
+/// A client's answer to a request the server sent (legacy protocol).
+#[cfg_attr(not(any(feature = "stdio", feature = "http")), allow(dead_code))]
+#[derive(Debug)]
+pub(crate) struct ClientResponse {
+    pub(crate) id: RequestId,
+    /// `Ok(result)` or `Err(error object)`.
+    pub(crate) outcome: Result<serde_json::Value, serde_json::Value>,
+}
+
+#[cfg_attr(not(any(feature = "stdio", feature = "http")), allow(dead_code))]
+/// Parses a message that [`parse`] reported as
+/// [`Rejection::UnexpectedResponse`] (size and depth were already checked).
+pub(crate) fn parse_client_response(bytes: &[u8]) -> Option<ClientResponse> {
+    #[derive(Deserialize)]
+    struct Wire {
+        id: RequestId,
+        #[serde(default)]
+        result: Option<serde_json::Value>,
+        #[serde(default)]
+        error: Option<serde_json::Value>,
+    }
+    let wire: Wire = serde_json::from_slice(bytes).ok()?;
+    let outcome = match (wire.result, wire.error) {
+        (_, Some(error)) => Err(error),
+        (Some(result), None) => Ok(result),
+        (None, None) => return None,
+    };
+    Some(ClientResponse {
+        id: wire.id,
+        outcome,
+    })
+}
+
 /// A JSON-RPC response produced by the server.
 #[derive(Debug, Clone)]
 pub enum Response {

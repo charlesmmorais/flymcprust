@@ -15,6 +15,7 @@ mod error;
 mod extension;
 mod hints;
 pub mod jsonrpc;
+mod legacy;
 mod limits;
 mod mirror;
 mod mrtr;
@@ -35,6 +36,7 @@ pub use completion::{CompleteFn, Completion, CompletionRequest, MAX_COMPLETION_V
 pub use context::{Ctx, State, TransportContext};
 pub use error::{ErrorKind, McpError};
 pub use extension::Extension;
+pub use legacy::{LEGACY_PROTOCOL_VERSIONS, LegacySession, is_legacy_version};
 pub use limits::{Limits, MAX_SUPPORTED_JSON_DEPTH};
 pub use mirror::{MirroredParam, ParamKind};
 pub use mrtr::{Elicitation, MIN_REQUEST_STATE_KEY_BYTES};

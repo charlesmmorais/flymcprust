@@ -21,6 +21,7 @@ use crate::error::McpError;
 use crate::extension::{self, Extension};
 use crate::hints::{self, Once};
 use crate::jsonrpc::{self, Message, Rejection, Request, Response};
+use crate::legacy::{LegacyConfig, LegacySession};
 use crate::limits::Limits;
 use crate::mirror::{self, MirroredParam};
 use crate::mrtr::{Args, MIN_REQUEST_STATE_KEY_BYTES, Round, RoundKey, StateCodec};
@@ -186,6 +187,8 @@ pub struct ServerBuilder {
     include_server_info: bool,
     request_state_key: Option<Vec<u8>>,
     request_state_ttl: Duration,
+    legacy_clients: bool,
+    legacy_session_ttl: Duration,
 }
 
 impl std::fmt::Debug for ServerBuilder {
@@ -218,6 +221,8 @@ impl ServerBuilder {
             include_server_info: true,
             request_state_key: None,
             request_state_ttl: Duration::from_secs(600),
+            legacy_clients: true,
+            legacy_session_ttl: Duration::from_secs(24 * 3600),
         }
     }
 
@@ -383,6 +388,22 @@ impl ServerBuilder {
         self
     }
 
+    /// Whether clients of the older protocol versions (2025-11-25 and
+    /// 2025-06-18, which open with `initialize`) are served. Default: `true`.
+    /// Handlers do not change: the SDK adapts the protocol, including
+    /// `ctx.elicit`, which becomes a request to the client.
+    pub fn legacy_clients(mut self, enabled: bool) -> Self {
+        self.legacy_clients = enabled;
+        self
+    }
+
+    /// Lifetime of the signed `MCP-Session-Id` given to legacy HTTP clients;
+    /// they reconnect with `initialize` after it. Default: 24 hours.
+    pub fn legacy_session_ttl(mut self, ttl: Duration) -> Self {
+        self.legacy_session_ttl = ttl;
+        self
+    }
+
     /// Whether results carry `io.modelcontextprotocol/serverInfo` in `_meta`
     /// (recommended by the specification). Default: `true`.
     pub fn include_server_info(mut self, include: bool) -> Self {
@@ -490,6 +511,14 @@ impl ServerBuilder {
 
         let supported_versions = vec![spec::PROTOCOL_VERSION.to_owned()];
 
+        let legacy = LegacyConfig::new(
+            self.legacy_clients,
+            self.legacy_session_ttl,
+            &capabilities,
+            &self.info,
+            self.instructions.as_deref(),
+        );
+
         let discover = spec::DiscoverResult {
             meta: result_meta.clone(),
             cache_scope: self.cache_scope,
@@ -577,6 +606,7 @@ impl ServerBuilder {
                 prompts: prompts.registry,
                 has_completions,
                 state_codec,
+                legacy,
                 legacy_hint: Once::new(),
                 state_hint: Once::new(),
                 discover,
@@ -614,6 +644,7 @@ struct Inner {
     prompts: Box<[RegisteredPrompt]>,
     has_completions: bool,
     state_codec: StateCodec,
+    legacy: LegacyConfig,
     legacy_hint: Once,
     state_hint: Once,
     discover: Box<RawValue>,
@@ -903,6 +934,14 @@ impl Server {
             .and_then(|i| self.inner.tools.get(i))
     }
 
+    pub(crate) fn legacy(&self) -> &LegacyConfig {
+        &self.inner.legacy
+    }
+
+    pub(crate) fn state_codec(&self) -> &StateCodec {
+        &self.inner.state_codec
+    }
+
     /// The protocol versions this server accepts.
     #[must_use]
     pub fn supported_versions(&self) -> &[String] {
@@ -977,14 +1016,19 @@ impl Server {
         let params = req.params.as_deref();
         match req.method.as_str() {
             methods::SERVER_DISCOVER => {
-                let p: MetaOnly = parse_params(params)?;
-                self.validate_meta(p.meta)?;
+                let p: MetaOnly<'_> = parse_params(params)?;
+                self.validate_meta(p.meta, &transport)?;
                 Ok(Some(self.inner.discover.clone()))
             }
-            methods::TOOLS_LIST => self.list(&req.method, params, Some(&*self.inner.tools_list)),
+            methods::TOOLS_LIST => self.list(
+                &req.method,
+                params,
+                Some(&*self.inner.tools_list),
+                &transport,
+            ),
             methods::TOOLS_CALL => {
                 let p: CallParams<'_> = parse_params(params)?;
-                let meta = self.validate_meta(p.meta)?;
+                let meta = self.validate_meta(p.meta, &transport)?;
                 let key = RoundKey {
                     method: methods::TOOLS_CALL,
                     target: &p.name,
@@ -996,15 +1040,21 @@ impl Server {
                     .await
                     .or_else(|e| self.input_required(e, &round, &key))
             }
-            methods::RESOURCES_LIST => {
-                self.list(&req.method, params, self.inner.resources_list.as_deref())
-            }
-            methods::RESOURCES_TEMPLATES_LIST => {
-                self.list(&req.method, params, self.inner.templates_list.as_deref())
-            }
+            methods::RESOURCES_LIST => self.list(
+                &req.method,
+                params,
+                self.inner.resources_list.as_deref(),
+                &transport,
+            ),
+            methods::RESOURCES_TEMPLATES_LIST => self.list(
+                &req.method,
+                params,
+                self.inner.templates_list.as_deref(),
+                &transport,
+            ),
             methods::RESOURCES_READ if self.inner.resources_list.is_some() => {
                 let p: ReadParams<'_> = parse_params(params)?;
-                let meta = self.validate_meta(p.meta)?;
+                let meta = self.validate_meta(p.meta, &transport)?;
                 let key = RoundKey {
                     method: methods::RESOURCES_READ,
                     target: &p.uri,
@@ -1016,12 +1066,15 @@ impl Server {
                     .await
                     .or_else(|e| self.input_required(e, &round, &key))
             }
-            methods::PROMPTS_LIST => {
-                self.list(&req.method, params, self.inner.prompts_list.as_deref())
-            }
+            methods::PROMPTS_LIST => self.list(
+                &req.method,
+                params,
+                self.inner.prompts_list.as_deref(),
+                &transport,
+            ),
             methods::PROMPTS_GET if self.inner.prompts_list.is_some() => {
-                let p: GetPromptParams = parse_params(params)?;
-                let meta = self.validate_meta(p.meta)?;
+                let p: GetPromptParams<'_> = parse_params(params)?;
+                let meta = self.validate_meta(p.meta, &transport)?;
                 let arguments = PromptArguments::new(p.arguments.unwrap_or_default());
                 let key = RoundKey {
                     method: methods::PROMPTS_GET,
@@ -1035,21 +1088,24 @@ impl Server {
                     .or_else(|e| self.input_required(e, &round, &key))
             }
             methods::COMPLETION_COMPLETE if self.inner.has_completions => {
-                let mut p: CompleteParams = parse_params(params)?;
-                self.validate_meta(p.meta.take())?;
+                let mut p: CompleteParams<'_> = parse_params(params)?;
+                self.validate_meta(p.meta.take(), &transport)?;
                 self.complete(p).map(Some)
             }
+            "initialize" if self.inner.legacy.enabled => self
+                .legacy_initialize(params)
+                .map(|(result, _)| Some(result)),
             "initialize" => {
                 hints::warn_once(
                     &self.inner.legacy_hint,
                     format_args!(
-                        "a client tried to connect with `initialize` (MCP 2025-11-25 or older); \
-                         this server speaks {} only",
+                        "a client tried to connect with `initialize` (MCP 2025-11-25 or older), \
+                         but this server only accepts {}",
                         self.inner.supported_versions.join(", ")
                     ),
-                    "use a client that supports MCP 2026-07-28 (the MCP Inspector needs \
-                     `--protocol-era modern`); support for older clients is planned \
-                     (docs/ROADMAP.md)",
+                    "legacy clients are disabled on this server; enable them with \
+                     ServerBuilder::legacy_clients(true), or use a client that supports MCP \
+                     2026-07-28",
                 );
                 Err(McpError::method_not_found_explained(format!(
                     "This server implements the stateless MCP protocol (versions: {}); \
@@ -1068,12 +1124,13 @@ impl Server {
         method: &str,
         params: Option<&RawValue>,
         body: Option<&RawValue>,
+        transport: &TransportContext,
     ) -> Result<Option<Box<RawValue>>, McpError> {
         let Some(body) = body else {
             return Err(McpError::method_not_found(method));
         };
         let p: ListParams<'_> = parse_params(params)?;
-        self.validate_meta(p.meta)?;
+        self.validate_meta(p.meta, transport)?;
         if p.cursor.is_some() {
             // Every list fits in one page, so no cursor is valid.
             return Err(McpError::invalid_params("Invalid cursor"));
@@ -1083,13 +1140,25 @@ impl Server {
 
     fn validate_meta(
         &self,
-        meta: Option<spec::RequestMetaObject>,
+        meta: Option<&RawValue>,
+        transport: &TransportContext,
     ) -> Result<RequestMeta, McpError> {
-        let meta = meta.ok_or_else(|| {
+        // Legacy clients declared everything at `initialize`.
+        if let Some(session) = transport.get::<LegacySession>() {
+            return Ok(session.request_meta());
+        }
+        let missing = || {
             McpError::invalid_params(
                 "Missing `_meta` with `io.modelcontextprotocol/protocolVersion` and \
                  `io.modelcontextprotocol/clientCapabilities`",
             )
+        };
+        let meta: spec::RequestMetaObject = serde_json::from_str(meta.ok_or_else(missing)?.get())
+            .map_err(|e| {
+            McpError::invalid_params(format!(
+                "Invalid `_meta`: {}",
+                crate::error::sanitize(&e.to_string())
+            ))
         })?;
         if !self
             .inner
@@ -1322,7 +1391,7 @@ impl Server {
         })?)
     }
 
-    fn complete(&self, p: CompleteParams) -> Result<Box<RawValue>, McpError> {
+    fn complete(&self, p: CompleteParams<'_>) -> Result<Box<RawValue>, McpError> {
         let completers = match &p.reference {
             CompletionRef::Prompt { name } => {
                 &self
@@ -1382,23 +1451,23 @@ impl tower_service::Service<McpRequest> for Server {
 }
 
 #[derive(Deserialize)]
-struct MetaOnly {
-    #[serde(rename = "_meta", default)]
-    meta: Option<spec::RequestMetaObject>,
+struct MetaOnly<'a> {
+    #[serde(rename = "_meta", borrow, default)]
+    meta: Option<&'a RawValue>,
 }
 
 #[derive(Deserialize)]
 struct ListParams<'a> {
-    #[serde(rename = "_meta", default)]
-    meta: Option<spec::RequestMetaObject>,
+    #[serde(rename = "_meta", borrow, default)]
+    meta: Option<&'a RawValue>,
     #[serde(borrow, default)]
     cursor: Option<std::borrow::Cow<'a, str>>,
 }
 
 #[derive(Deserialize)]
 struct CallParams<'a> {
-    #[serde(rename = "_meta", default)]
-    meta: Option<spec::RequestMetaObject>,
+    #[serde(rename = "_meta", borrow, default)]
+    meta: Option<&'a RawValue>,
     name: String,
     #[serde(borrow, default)]
     arguments: Option<&'a RawValue>,
@@ -1410,8 +1479,8 @@ struct CallParams<'a> {
 
 #[derive(Deserialize)]
 struct ReadParams<'a> {
-    #[serde(rename = "_meta", default)]
-    meta: Option<spec::RequestMetaObject>,
+    #[serde(rename = "_meta", borrow, default)]
+    meta: Option<&'a RawValue>,
     #[serde(borrow)]
     uri: std::borrow::Cow<'a, str>,
     #[serde(rename = "inputResponses", default)]
@@ -1421,9 +1490,9 @@ struct ReadParams<'a> {
 }
 
 #[derive(Deserialize)]
-struct GetPromptParams {
-    #[serde(rename = "_meta", default)]
-    meta: Option<spec::RequestMetaObject>,
+struct GetPromptParams<'a> {
+    #[serde(rename = "_meta", borrow, default)]
+    meta: Option<&'a RawValue>,
     name: String,
     #[serde(default)]
     arguments: Option<BTreeMap<String, String>>,
@@ -1458,9 +1527,9 @@ impl From<McpError> for HandlerError {
 }
 
 #[derive(Deserialize)]
-struct CompleteParams {
-    #[serde(rename = "_meta", default)]
-    meta: Option<spec::RequestMetaObject>,
+struct CompleteParams<'a> {
+    #[serde(rename = "_meta", borrow, default)]
+    meta: Option<&'a RawValue>,
     #[serde(rename = "ref")]
     reference: CompletionRef,
     argument: CompletionArgument,

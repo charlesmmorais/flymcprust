@@ -352,8 +352,13 @@ async fn protocol_errors() {
     let r = request(&s, "resources/list", json!({ "_meta": meta() })).await;
     assert_eq!(error_code(&r), -32601);
 
-    // Legacy handshake: -32601 naming the supported versions.
-    let r = request(&s, "initialize", json!({})).await;
+    // Legacy handshake with legacy clients turned off: -32601 naming the
+    // supported versions.
+    let strict = ServerBuilder::new("s", "1")
+        .legacy_clients(false)
+        .build()
+        .unwrap();
+    let r = request(&strict, "initialize", json!({})).await;
     assert_eq!(error_code(&r), -32601);
     assert!(
         r["error"]["message"]

@@ -15,6 +15,8 @@ servers and competes on simplicity, efficiency and security.
 | 2 | `#[resource]` (URI templates), `#[prompt]`, completion, multi round-trip requests with signed `requestState` |
 | Security review | 9 findings fixed with regression tests ([SECURITY.md](SECURITY.md)) |
 | 3 | Comparative benchmarks against `rmcp` and the official Python SDK ([bench/results/RESULTS.md](../bench/results/RESULTS.md)) |
+| DX | 5-minute quickstart, fix-it hints in errors |
+| 4 | Clients of 2025-11-25 and 2025-06-18: `initialize`, signed sessions, input requests as server-to-client requests; 73/78 checks of the 2025-11-25 conformance suite |
 
 ## Next, in order
 
@@ -42,7 +44,7 @@ and 22–39× the throughput of the Python SDK. On a Linux CI runner: 2.4–2.6�
 rmcp's throughput with 3.2–4.1× less CPU on small messages. Next steps: add the stdio transport, and look for the remaining cost on
 large payloads (several `serde_json` passes over the same message).
 
-### 4. Compatibility with 2025-11-25 clients
+### 4. Compatibility with 2025-11-25 clients (done)
 
 Many clients (including the MCP Inspector by default) still speak
 2025-11-25 (`initialize`, sessions). A server that only speaks 2026-07-28

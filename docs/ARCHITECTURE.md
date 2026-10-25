@@ -346,14 +346,32 @@ Request handling, in order:
    dropped, the handler future is dropped too, which is the cancellation
    semantics the spec requires.
 
-### 7.3 Future: legacy (2025-11-25) adapter
+### 7.3 Legacy clients (2025-11-25, 2025-06-18)
 
-Legacy support reintroduces state: the `initialize` handshake, plus
-`Mcp-Session-Id` over HTTP. It lives entirely at the transport edge. A legacy
-adapter recognizes `initialize`, stores the negotiated version and
-capabilities per stdio process or HTTP session, and synthesizes the per-request
-context the stateless core expects. The core never learns about sessions. Era
-detection follows the spec's compatibility matrix.
+On by default (`legacy_clients(false)` turns it off). The adapter
+(`legacy.rs`) sits between the transports and the unchanged stateless core:
+
+- **`initialize`** negotiates 2025-11-25 or 2025-06-18 (anything else gets
+  2025-11-25, and the client decides) and returns the server's capabilities.
+- **Sessions without server state.** On stdio the connection remembers what
+  the client declared. On HTTP, `MCP-Session-Id` is an HMAC-signed token
+  (same key as `requestState`, separate signing context) carrying version,
+  capabilities, client info, expiry (24 h) and a random nonce. Any instance
+  with the shared key serves any request; an invalid or expired token gets
+  `404`, which makes clients initialize again; `DELETE` gets `405`.
+- **Era detection.** A request whose `MCP-Protocol-Version` is 2026-07-28 is
+  modern (session headers ignored, `initialize` is `404`). Otherwise a session
+  token, or a legacy version header, makes it legacy. Legacy requests skip the
+  2026-07-28 header checks and `_meta` validation: the session supplies the
+  request context.
+- **Input requests.** When a handler returns `input_required`, the adapter
+  sends each input request to the client as a server-to-client request (stdio:
+  on the connection; HTTP: the POST response turns into an SSE stream), routes
+  the answers back (random 128-bit ids, bound to the session), and reruns the
+  handler with `inputResponses` and `requestState`, up to 16 rounds. Handlers
+  using `ctx.elicit` are unchanged.
+- **Wire format.** `resultType`, `ttlMs` and `cacheScope` are removed;
+  resource-not-found uses `-32002`; `ping` answers `{}`.
 
 ## 8. The `#[tool]` macro
 
@@ -496,6 +514,7 @@ exception to the safety rules is needed.
 | 2026-10-25 | MRTR uses the *replay* model (chosen by the owner): `ctx.elicit(key, msg).await?` returns the answer if the client sent it (this round or an earlier one), otherwise records the request and ends the round with an internal "input required" error that the runtime turns into `InputRequiredResult`. Handlers rerun from the start each round, so code before an input call must be idempotent. Questions awaited together (`tokio::join!`) share a round. This replaces the planned `ToolOutput::InputRequired`: an error kind propagates with `?` through any return type. |
 | 2026-10-25 | `requestState` is always emitted and carries the answers of earlier rounds, so the server stays stateless. It is HMAC-SHA256 signed (`hmac` + `sha2`, chosen by the owner) and bound to the method, the target (tool/prompt name or resource URI), a digest of the arguments (whitespace- and key-order-insensitive) and an expiry (default 10 min). Failed verification is `-32602`. The key is random per process unless `request_state_key` (at least 32 bytes) is set, which multi-instance deployments need. Binding to the authenticated principal (a spec SHOULD) waits for OAuth. |
 | 2026-10-25 | Answers in the current round's `inputResponses` need no state: they are client input like arguments. Unknown keys are ignored; a missing answer is asked again; an answer that does not decode is `-32602`. Input requests check the client capabilities first (`-32021` otherwise). Sampling and roots helpers are `#[deprecated]` like the features (SEP-2577). |
+| 2026-10-25 | Phase 4 decisions (chosen by the owner): legacy clients are on by default; versions 2025-11-25 and 2025-06-18; HTTP sessions are signed tokens rather than server-side state, so the server stays stateless and has no session table to exhaust. Types of 2025-11-25 are not generated: the adapter only builds `InitializeResult` and strips fields, checked by the 2025-11-25 conformance suite. |
 | 2026-10-25 | Developer-facing errors say how to fix the problem. `BuildError` has `help()` and a `Debug` that prints the message plus `= help:` (what `fn main() -> Result` shows). Runtime rejections a client can trigger (host, origin, size, timeouts, busy, legacy `initialize`, invalid `requestState`, missing capability) log their fix at `WARN` once, then `DEBUG`; client values in log lines are truncated and escaped. Clients still get only short, generic errors. `logging::init()` (feature `logging`) makes these visible with one call, and `serve_stdio` explains itself when started from a terminal. |
 | 2026-10-25 | Duplicate `Host` headers are rejected (RFC 9112): only the first was checked, while an intermediary might route on another. |
 | 2026-10-25 | Performance is compared against `rmcp` and the official Python SDK with the same server in `bench/` (a separate workspace) and one closed-loop load generator; CPU time per request is the headline efficiency metric because it barely depends on the load generator. The first comparison found the depth pre-scan walking strings byte by byte; it now skips them with `memchr` (already a `serde_json` dependency): 64 KiB parse −82%, dispatch −50%. |

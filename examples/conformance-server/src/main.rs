@@ -163,7 +163,7 @@ async fn main() -> ExitCode {
                 .tool::<test_missing_capability>()
                 .tool::<test_custom_header>()
                 .tool_def(schema_tool);
-            fixtures::register(builder)
+            fixtures::register_legacy(fixtures::register(builder))
                 .build()
                 .map_err(|e| e.to_string())
         });

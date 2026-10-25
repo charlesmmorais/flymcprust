@@ -1,0 +1,12 @@
+# Known failures of the official MCP conformance suite for protocol version
+# 2025-11-25 (older clients) against examples/conformance-server. Every entry
+# is a feature the SDK does not implement yet. CI fails on any other failure
+# and on stale entries.
+server:
+  # Logging (logging/setLevel, notifications/message) and progress.
+  - logging-set-level
+  - tools-call-with-logging
+  - tools-call-with-progress
+  # Resource subscriptions.
+  - resources-subscribe
+  - resources-unsubscribe

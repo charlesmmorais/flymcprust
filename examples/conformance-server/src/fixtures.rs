@@ -270,3 +270,108 @@ pub(crate) fn register(builder: ServerBuilder) -> ServerBuilder {
         .tool::<test_input_required_result_tampered_state>()
         .tool::<test_input_required_result_capabilities>()
 }
+
+// ---------------------------------------------------------------------------
+// Fixtures of the 2025-11-25 scenarios. Legacy clients receive these input
+// requests as server-to-client requests; the handlers are the same.
+
+fn describe(
+    answer: &sdkmcprust::Elicitation<serde_json::Map<String, serde_json::Value>>,
+) -> String {
+    match answer {
+        sdkmcprust::Elicitation::Accepted(content) => {
+            format!(
+                "action=accept, content={}",
+                serde_json::Value::Object(content.clone())
+            )
+        }
+        sdkmcprust::Elicitation::Declined => "action=decline, content={}".to_owned(),
+        sdkmcprust::Elicitation::Cancelled => "action=cancel, content={}".to_owned(),
+    }
+}
+
+/// Requests LLM sampling from the client.
+///
+/// # Arguments
+/// * `prompt` - The prompt to send to the LLM
+#[tool]
+async fn test_sampling(ctx: Ctx, prompt: String) -> Result<String, ToolError> {
+    let answer = ctx.sample("sampling", sampling(&prompt, 100)).await?;
+    Ok(format!("LLM response: {}", sampled_text(&answer)))
+}
+
+/// Requests user input from the client.
+///
+/// # Arguments
+/// * `message` - The message to show the user
+#[tool]
+async fn test_elicitation(ctx: Ctx, message: String) -> Result<String, ToolError> {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "username": { "type": "string", "description": "User's response" },
+            "email": { "type": "string", "description": "User's email address" }
+        },
+        "required": ["username", "email"]
+    });
+    let answer = ctx
+        .elicit_with_schema("elicitation", message, schema)
+        .await?;
+    Ok(format!("User response: {}", describe(&answer)))
+}
+
+/// Requests elicitation with default values for every primitive type.
+#[tool]
+async fn test_elicitation_sep1034_defaults(ctx: Ctx) -> Result<String, ToolError> {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string", "default": "John Doe" },
+            "age": { "type": "integer", "default": 30 },
+            "score": { "type": "number", "default": 95.5 },
+            "status": { "type": "string", "enum": ["active", "inactive", "pending"], "default": "active" },
+            "verified": { "type": "boolean", "default": true }
+        }
+    });
+    let answer = ctx
+        .elicit_with_schema("defaults", "Please review the defaults", schema)
+        .await?;
+    Ok(format!("Elicitation completed: {}", describe(&answer)))
+}
+
+/// Requests elicitation with the five enum variants.
+#[tool]
+async fn test_elicitation_sep1330_enums(ctx: Ctx) -> Result<String, ToolError> {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "untitledSingle": { "type": "string", "enum": ["option1", "option2", "option3"] },
+            "titledSingle": { "type": "string", "oneOf": [
+                { "const": "value1", "title": "First Option" },
+                { "const": "value2", "title": "Second Option" },
+                { "const": "value3", "title": "Third Option" }
+            ] },
+            "legacyEnum": { "type": "string", "enum": ["opt1", "opt2", "opt3"],
+                "enumNames": ["Option One", "Option Two", "Option Three"] },
+            "untitledMulti": { "type": "array", "items": { "type": "string", "enum": ["option1", "option2", "option3"] } },
+            "titledMulti": { "type": "array", "items": { "anyOf": [
+                { "const": "value1", "title": "First Choice" },
+                { "const": "value2", "title": "Second Choice" },
+                { "const": "value3", "title": "Third Choice" }
+            ] } }
+        }
+    });
+    let answer = ctx
+        .elicit_with_schema("enums", "Please choose", schema)
+        .await?;
+    Ok(format!("Elicitation completed: {}", describe(&answer)))
+}
+
+/// Registers the 2025-11-25 fixtures.
+pub(crate) fn register_legacy(builder: ServerBuilder) -> ServerBuilder {
+    builder
+        .tool::<test_sampling>()
+        .tool::<test_elicitation>()
+        .tool::<test_elicitation_sep1034_defaults>()
+        .tool::<test_elicitation_sep1330_enums>()
+}

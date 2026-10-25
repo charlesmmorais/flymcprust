@@ -8,6 +8,13 @@
 //!   which then produces no response.
 //! - End of input stops reading; in-flight requests get a grace period to
 //!   finish before the transport returns.
+//! - Legacy clients (2025-11-25, 2025-06-18) open with `initialize`; the
+//!   connection then remembers what they declared, and input requests of
+//!   multi round-trip handlers are sent to them as server-to-client requests
+//!   whose responses are routed back here. Server requests wait at most the
+//!   tool timeout: if every request slot is taken by handlers waiting for
+//!   the client while the client sends yet another request first, reading
+//!   pauses until those waits time out.
 
 use std::collections::HashMap;
 use std::io;
@@ -23,6 +30,7 @@ use tokio_util::sync::CancellationToken;
 use crate::context::TransportContext;
 use crate::error::McpError;
 use crate::jsonrpc::{self, Message, Rejection, Response};
+use crate::legacy::{ChannelPeer, LegacySession, PendingRequests};
 use crate::server::{McpRequest, Server};
 use crate::spec::{RequestId, methods};
 
@@ -85,6 +93,15 @@ where
     let writer_task = tokio::spawn(write_loop(writer, rx));
 
     let in_flight: InFlight = Arc::default();
+    // Legacy protocol: what the client declared at `initialize`, and the
+    // server-to-client requests waiting for an answer.
+    let legacy: Arc<Mutex<Option<LegacySession>>> = Arc::default();
+    let peer = ChannelPeer {
+        pending: Arc::new(PendingRequests::default()),
+        owner: 0,
+        out: tx.clone(),
+        timeout: limits.tool_timeout,
+    };
     let permits = Arc::new(Semaphore::new(limits.max_concurrent_calls.max(1)));
     let mut tasks = JoinSet::new();
     let mut reader = BufReader::new(reader);
@@ -121,7 +138,12 @@ where
                 continue;
             }
             Err(Rejection::UnexpectedResponse) => {
-                tracing::debug!("ignoring a JSON-RPC response sent by the client");
+                // A legacy client answering one of our requests.
+                let routed = jsonrpc::parse_client_response(&line)
+                    .is_some_and(|response| peer.pending.complete(response, 0));
+                if !routed {
+                    tracing::debug!("ignoring a JSON-RPC response that answers no pending request");
+                }
                 continue;
             }
         };
@@ -136,6 +158,29 @@ where
             }
             Message::Request(request) => request,
         };
+
+        if request.method == "initialize" && server.legacy_clients_enabled() {
+            let response = match server.legacy_initialize(request.params.as_deref()) {
+                Ok((result, session)) => {
+                    *legacy
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(session);
+                    Response::Result {
+                        id: request.id,
+                        result,
+                    }
+                }
+                Err(error) => Response::error(Some(request.id), error),
+            };
+            if tx.send(response.to_vec()).await.is_err() {
+                break Ok(());
+            }
+            continue;
+        }
+        let session = legacy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
 
         let token = CancellationToken::new();
         let duplicate = match lock(&in_flight).entry(request.id.clone()) {
@@ -163,15 +208,25 @@ where
         let server = server.clone();
         let tx = tx.clone();
         let in_flight = Arc::clone(&in_flight);
+        let peer = peer.clone();
         tasks.spawn(async move {
             let id = request.id.clone();
-            let response = server
-                .handle(McpRequest {
-                    message: Message::Request(request),
-                    transport: TransportContext::default(),
-                    cancellation: token,
-                })
-                .await;
+            let response = match session {
+                Some(session) => {
+                    server
+                        .handle_legacy(request, &session, TransportContext::default(), token, &peer)
+                        .await
+                }
+                None => {
+                    server
+                        .handle(McpRequest {
+                            message: Message::Request(request),
+                            transport: TransportContext::default(),
+                            cancellation: token,
+                        })
+                        .await
+                }
+            };
             lock(&in_flight).remove(&id);
             if let Some(response) = response {
                 // The writer only stops when output is closed; nothing to do then.
@@ -191,7 +246,13 @@ where
     {
         tracing::warn!("in-flight requests did not finish before shutdown; aborting them");
         tasks.abort_all();
+        // Aborted tasks release their copies of the writer channel when they
+        // are dropped.
+        while tasks.join_next().await.is_some() {}
     }
+    // The writer stops once every sender is gone, including the legacy
+    // peer's copy: otherwise end of input would never end the transport.
+    drop(peer);
     drop(tx);
     let write_result = writer_task
         .await

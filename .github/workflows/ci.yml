@@ -144,7 +144,7 @@ jobs:
         run: cargo build --manifest-path bench/Cargo.toml
 
   conformance:
-    name: MCP conformance (2026-07-28)
+    name: MCP conformance (2026-07-28 and 2025-11-25)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -162,3 +162,4 @@ jobs:
             sleep 1
           done
           npx --yes @modelcontextprotocol/conformance@0.2.0-alpha.12 server             --url http://127.0.0.1:3000/mcp --spec-version 2026-07-28 --suite all             --expected-failures conformance-baseline.yml
+          npx --yes @modelcontextprotocol/conformance@0.2.0-alpha.12 server             --url http://127.0.0.1:3000/mcp --spec-version 2025-11-25 --suite all             --expected-failures conformance-baseline-2025-11-25.yml

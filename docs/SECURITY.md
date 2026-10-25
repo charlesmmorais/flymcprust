@@ -35,6 +35,7 @@ host.
 | Browser attacks on a local server (CSRF, DNS rebinding) | `Origin` and `Host` allowlists default to localhost; `Content-Type: application/json` required (no CORS-simple requests); CORS preflight only for allowed origins; no credentials in CORS; `X-Content-Type-Options: nosniff`. |
 | Header/body desynchronization (SEP-2243) | `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` and every `Mcp-Param-*` must match the body exactly (integers compared exactly, base64 sentinel validated); duplicate MCP headers rejected. |
 | Path traversal through resource URIs | Decoded `{var}`, `{/var}` and query values never contain `/`, `\` or control characters; `security::confine_path` confines `{+path}` values (and any file argument) to a root, after resolving symbolic links. |
+| Forged legacy sessions or answers (2025-11-25 clients) | `MCP-Session-Id` tokens are HMAC-signed (separate signing context from `requestState`), expire after 24 h and carry a random nonce, so they are unique and cannot be forged or altered; invalid ones get `404`. Server-to-client requests use random 128-bit ids bound to the session that caused them, so another client cannot answer them. |
 | Forged or replayed `requestState` (MRTR) | HMAC-SHA256 with a 256-bit random key (or a configured one of at least 32 bytes), verified in constant time before parsing; bound to method, target, argument digest and expiry (10 min); only answers the handler actually read are carried forward. |
 | Requests for input the client cannot serve | Client capabilities checked before any input request (`-32021`). |
 | Supply chain | `cargo-deny` (licenses, advisories, bans, sources) and `cargo-audit` in CI; protocol schema pinned by SHA-256. |
@@ -60,6 +61,10 @@ The SDK cannot enforce these; applications must:
 7. **Mind what you log.** Logs may contain client input.
 
 ## 4. Known limitations
+
+- Legacy sessions cannot be revoked before they expire (`DELETE` gets
+  `405`); rotating the key ends all of them. A legacy request without a session
+  is served with no client capabilities.
 
 - `requestState` is not yet bound to the authenticated principal (a spec
   SHOULD); this comes with OAuth. Within its 10-minute lifetime, a state can

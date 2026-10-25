@@ -43,7 +43,8 @@ pub const MIN_REQUEST_STATE_KEY_BYTES: usize = 32;
 /// Version of the `requestState` payload format.
 const STATE_VERSION: u8 = 1;
 
-/// Domain separation for the signature.
+/// Domain separation for `requestState` signatures: a token signed for one
+/// purpose (such as a legacy session) is never valid for another.
 const SIGNATURE_CONTEXT: &[u8] = b"sdkmcprust/requestState/v1\0";
 
 /// Signs and verifies `requestState`.
@@ -83,30 +84,45 @@ impl StateCodec {
         Self { key, ttl }
     }
 
-    fn mac(&self, data: &[u8]) -> Result<HmacSha256, McpError> {
-        let mut mac = HmacSha256::new_from_slice(&self.key).map_err(|_| McpError::internal())?;
-        mac.update(SIGNATURE_CONTEXT);
+    fn mac(&self, context: &[u8], data: &[u8]) -> Option<HmacSha256> {
+        let mut mac = HmacSha256::new_from_slice(&self.key).ok()?;
+        mac.update(context);
         mac.update(data);
-        Ok(mac)
+        Some(mac)
+    }
+
+    /// Serializes and signs a payload for one purpose (`context`). The token
+    /// is URL-safe base64 plus a dot: visible ASCII, usable in HTTP headers.
+    pub(crate) fn seal_for<T: Serialize>(&self, context: &[u8], payload: &T) -> Option<String> {
+        let json = serde_json::to_vec(payload).ok()?;
+        let body = URL_SAFE_NO_PAD.encode(json);
+        let tag = self.mac(context, body.as_bytes())?.finalize().into_bytes();
+        Some(format!("{body}.{}", URL_SAFE_NO_PAD.encode(tag)))
+    }
+
+    /// Verifies a token signed with [`seal_for`](Self::seal_for) for the
+    /// same purpose (in constant time) before decoding it.
+    pub(crate) fn open_for<T: DeserializeOwned>(&self, context: &[u8], token: &str) -> Option<T> {
+        let (body, tag) = token.rsplit_once('.')?;
+        let tag = URL_SAFE_NO_PAD.decode(tag).ok()?;
+        self.mac(context, body.as_bytes())?
+            .verify_slice(&tag)
+            .ok()?;
+        let json = URL_SAFE_NO_PAD.decode(body).ok()?;
+        serde_json::from_slice(&json).ok()
     }
 
     fn seal(&self, payload: &Payload) -> Result<String, McpError> {
-        let json = serde_json::to_vec(payload).map_err(|_| McpError::internal())?;
-        let body = URL_SAFE_NO_PAD.encode(json);
-        let tag = self.mac(body.as_bytes())?.finalize().into_bytes();
-        Ok(format!("{body}.{}", URL_SAFE_NO_PAD.encode(tag)))
+        self.seal_for(SIGNATURE_CONTEXT, payload)
+            .ok_or_else(McpError::internal)
     }
 
     fn open(&self, token: &str, round: &RoundKey<'_>) -> Result<Payload, McpError> {
         let digest = round.args_digest();
         let invalid = || McpError::invalid_params("Invalid or expired requestState");
-        let (body, tag) = token.rsplit_once('.').ok_or_else(invalid)?;
-        let tag = URL_SAFE_NO_PAD.decode(tag).map_err(|_| invalid())?;
-        self.mac(body.as_bytes())?
-            .verify_slice(&tag)
-            .map_err(|_| invalid())?;
-        let json = URL_SAFE_NO_PAD.decode(body).map_err(|_| invalid())?;
-        let payload: Payload = serde_json::from_slice(&json).map_err(|_| invalid())?;
+        let payload: Payload = self
+            .open_for(SIGNATURE_CONTEXT, token)
+            .ok_or_else(invalid)?;
         if payload.v != STATE_VERSION
             || payload.m != round.method
             || payload.t != round.target
@@ -119,7 +135,7 @@ impl StateCodec {
     }
 }
 
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
@@ -377,6 +393,38 @@ impl Ctx {
         let request = json!({
             "method": methods::ELICITATION_CREATE,
             "params": { "message": message.into(), "requestedSchema": schema },
+        });
+        Err(self.ask(key, request, Needs::Elicitation))
+    }
+
+    /// Like [`elicit_with_action`](Self::elicit_with_action), with a
+    /// hand-written `requestedSchema` (for default values, titled enums or
+    /// multi-select fields, which a derived schema cannot express). The
+    /// accepted content comes back as JSON, for the handler to validate.
+    ///
+    /// # Errors
+    ///
+    /// See [`elicit`](Self::elicit).
+    pub async fn elicit_with_schema(
+        &self,
+        key: &str,
+        message: impl Into<String>,
+        requested_schema: Value,
+    ) -> Result<Elicitation<Map<String, Value>>, ToolError> {
+        if let Some(answer) = self.input_response::<ElicitAnswer>(key)? {
+            return match answer.action.as_str() {
+                "accept" => match answer.content.unwrap_or_else(|| json!({})) {
+                    Value::Object(content) => Ok(Elicitation::Accepted(content)),
+                    _ => Err(invalid_response(key)),
+                },
+                "decline" => Ok(Elicitation::Declined),
+                "cancel" => Ok(Elicitation::Cancelled),
+                _ => Err(invalid_response(key)),
+            };
+        }
+        let request = json!({
+            "method": methods::ELICITATION_CREATE,
+            "params": { "message": message.into(), "requestedSchema": requested_schema },
         });
         Err(self.ask(key, request, Needs::Elicitation))
     }
