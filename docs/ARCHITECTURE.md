@@ -375,10 +375,15 @@ Server::builder("calc", "0.1.0")
   function's name (`struct add {}`). A braced struct only occupies the type
   namespace, so the function `add` remains callable as before, and the struct
   implements the `Tool` trait used by `.tool::<add>()`.
-- **Descriptions.** The tool description is the doc comment (minus the
-  `# Arguments` section). Parameter descriptions come from the `# Arguments`
-  section. Doc comments placed directly on parameters will also be accepted if
-  the implementation spike confirms the compiler allows it.
+- **Descriptions.** The tool description is the doc comment up to its
+  first heading; later sections (`# Errors`, `# Examples`) stay rustdoc-only.
+  Parameter descriptions come from doc comments placed directly on the
+  parameters (the macro strips them before the compiler validates the
+  function) or from the `# Arguments` section. Documenting a name that is not
+  a JSON parameter is a compile error.
+- **Forwarded attributes.** `#[serde(..)]` and `#[schemars(..)]` on a
+  parameter are copied to the generated field (defaults, validation ranges,
+  renames). Any other parameter attribute is a compile error.
 - **Annotations.** `read_only`, `idempotent`, `destructive` and `open_world`
   map to the `…Hint` fields of `ToolAnnotations`. Also supported: `name = "…"`
   and `title = "…"`.
@@ -394,10 +399,10 @@ Server::builder("calc", "0.1.0")
 **Rejected: auto-registration by default.** Implicit global registration is
 surprising and depends on linker support on every platform.
 
-`inventory` relies on link sections. Whether that is compatible with
-`#![forbid(unsafe_code)]` in user crates is verified by a spike. If it is not,
-the exception is isolated and documented, or the implementation switches to
-`linkme`.
+`inventory` relies on link sections. The spike confirmed it is compatible
+with `#![forbid(unsafe_code)]`, both in `sdkmcprust-core` (which declares the
+registry) and in user crates (where `#[tool]` submits entries), so no
+exception to the safety rules is needed.
 
 **Alternatives considered for the API shape.**
 
@@ -458,3 +463,5 @@ the exception is isolated and documented, or the implementation switches to
 | Date | Decision |
 | --- | --- |
 | 2026-10-25 | Own stack instead of building on `rmcp`; explicit registration plus opt-in `inventory` auto-registration; HTTP on `http` + `hyper-util`; custom code generator reading `schema.json` and `schema.ts`. |
+| 2026-10-25 | `McpError` carries an `ErrorKind` so HTTP can choose the status without guessing: malformed requests are `400`, unknown methods `404`, failed-but-valid requests (unknown tool) `200`. Answering `400` for an unknown tool could make a dual-era client fall back to the legacy protocol. |
+| 2026-10-25 | `x-mcp-header` (SEP-2243) is supported in phase 1: annotations are validated at build time, and `Mcp-Param-*` headers are checked against the arguments. |

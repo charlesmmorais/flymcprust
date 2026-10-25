@@ -1,0 +1,5 @@
+error: invalid tool name: use 1-128 characters from A-Z, a-z, 0-9, `_`, `-` and `.`
+ --> tests/ui/invalid_name.rs:3:15
+  |
+3 | #[tool(name = "has spaces")]
+  |               ^^^^^^^^^^^^

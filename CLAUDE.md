@@ -70,6 +70,7 @@ Other useful commands:
 cargo +1.88 check --workspace --all-features     # MSRV
 cargo xtask codegen --check                      # generated code is fresh
 cargo bench -p sdkmcprust-core                   # benchmarks
+TRYBUILD=overwrite cargo test -p sdkmcprust --test ui   # refresh macro UI snapshots, then review the diff
 ```
 
 ## Workflow

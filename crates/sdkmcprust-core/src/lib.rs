@@ -7,6 +7,8 @@
 //! bytes. See `docs/ARCHITECTURE.md` for the design.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "auto-register")]
+mod auto;
 mod context;
 mod error;
 mod extension;
@@ -31,3 +33,9 @@ pub use tool::{
     ToolFuture, ToolOutput, ToolResult, input_schema_for, output_schema_from, parse_arguments,
     schema_for,
 };
+
+#[cfg(feature = "auto-register")]
+pub use auto::AutoTool;
+#[cfg(feature = "auto-register")]
+#[doc(hidden)]
+pub use inventory as __inventory;

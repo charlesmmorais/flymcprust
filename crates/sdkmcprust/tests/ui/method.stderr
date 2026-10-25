@@ -1,0 +1,5 @@
+error: #[tool] must be applied to a free function, not a method taking `self`
+ --> tests/ui/method.rs:7:12
+  |
+7 |     fn add(&self, a: i64, b: i64) -> i64 {
+  |            ^^^^^

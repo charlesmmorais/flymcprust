@@ -19,6 +19,7 @@ http-body = { workspace = true, optional = true }
 http-body-util = { workspace = true, optional = true }
 hyper = { workspace = true, optional = true }
 hyper-util = { workspace = true, optional = true }
+inventory = { workspace = true, optional = true }
 schemars.workspace = true
 sdkmcprust-spec.workspace = true
 serde.workspace = true
@@ -45,6 +46,9 @@ http = [
     "tokio/net",
     "tokio/rt",
 ]
+
+## Registry used by `ServerBuilder::auto_tools` (see docs/ARCHITECTURE.md §9).
+auto-register = ["dep:inventory"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util", "io-util", "net"] }

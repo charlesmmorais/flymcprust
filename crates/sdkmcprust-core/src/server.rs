@@ -123,6 +123,17 @@ impl ServerBuilder {
         self
     }
 
+    /// Registers every `#[tool]` linked into the binary (feature
+    /// `auto-register`). Tools can still be added explicitly; duplicates are
+    /// reported by [`build`](Self::build).
+    #[cfg(feature = "auto-register")]
+    pub fn auto_tools(mut self) -> Self {
+        for tool in inventory::iter::<crate::auto::AutoTool> {
+            self.tools.push(tool.definition());
+        }
+        self
+    }
+
     /// Registers a tool definition built by hand.
     pub fn tool_def(mut self, def: ToolDef) -> Self {
         self.tools.push(def);

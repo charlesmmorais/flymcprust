@@ -1,0 +1,5 @@
+error: #[tool] parameters must be owned (e.g. `String` instead of `&str`)
+ --> tests/ui/borrowed_param.rs:4:16
+  |
+4 | fn shout(text: &str) -> String {
+  |                ^^^^

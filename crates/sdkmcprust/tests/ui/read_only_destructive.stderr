@@ -1,0 +1,5 @@
+error: a `read_only` tool cannot be `destructive`
+ --> tests/ui/read_only_destructive.rs:3:19
+  |
+3 | #[tool(read_only, destructive)]
+  |                   ^^^^^^^^^^^

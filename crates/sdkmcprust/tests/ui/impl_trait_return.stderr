@@ -1,0 +1,5 @@
+error: #[tool] functions cannot return `impl Trait`; name the type
+ --> tests/ui/impl_trait_return.rs:4:14
+  |
+4 | fn text() -> impl ToString {
+  |              ^^^^^^^^^^^^^

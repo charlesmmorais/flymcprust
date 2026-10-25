@@ -1,0 +1,5 @@
+error: only doc comments, #[serde(..)] and #[schemars(..)] are allowed on #[tool] parameters
+ --> tests/ui/param_attribute.rs:4:8
+  |
+4 | fn add(#[cfg(test)] a: i64, b: i64) -> i64 {
+  |        ^^^^^^^^^^^^

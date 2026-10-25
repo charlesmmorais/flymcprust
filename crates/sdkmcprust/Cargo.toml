@@ -12,8 +12,11 @@ categories.workspace = true
 publish.workspace = true
 
 [dependencies]
+schemars.workspace = true
 sdkmcprust-core.workspace = true
 sdkmcprust-macros = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
 
 [features]
 default = ["macros"]
@@ -23,6 +26,16 @@ macros = ["dep:sdkmcprust-macros"]
 stdio = ["sdkmcprust-core/stdio"]
 ## Streamable HTTP transport.
 http = ["sdkmcprust-core/http"]
+## `ServerBuilder::auto_tools()`: register every `#[tool]` in the binary.
+auto-register = ["macros", "sdkmcprust-core/auto-register", "sdkmcprust-macros/auto-register"]
+
+[dev-dependencies]
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio-util.workspace = true
+trybuild = "1.0.104"
 
 [lints]
 workspace = true

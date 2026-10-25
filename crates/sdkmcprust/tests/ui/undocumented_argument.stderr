@@ -1,0 +1,5 @@
+error: `# Arguments` documents `c`, which is not a JSON parameter of this tool
+ --> tests/ui/undocumented_argument.rs:8:4
+  |
+8 | fn add(a: i64, b: i64) -> i64 {
+  |    ^^^
