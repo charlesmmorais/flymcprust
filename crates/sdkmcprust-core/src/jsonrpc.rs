@@ -233,25 +233,33 @@ impl Response {
 
 /// Returns `true` when `bytes` nests objects/arrays deeper than `max`.
 ///
-/// A single pass that tracks string and escape state, so brackets inside
-/// strings are ignored. Runs before `serde` to bound recursion cheaply.
+/// A single pass that skips string contents, so brackets inside strings are
+/// ignored. Strings are skipped with `memchr` (vectorized), which keeps the
+/// scan cheap for large payloads. Runs before `serde` to bound recursion.
 pub(crate) fn exceeds_depth(bytes: &[u8], max: usize) -> bool {
     let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for &b in bytes {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if b == b'\\' {
-                escaped = true;
-            } else if b == b'"' {
-                in_string = false;
-            }
-            continue;
-        }
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        i += 1;
         match b {
-            b'"' => in_string = true,
+            b'"' => {
+                // Jump to the closing quote, stepping over escapes.
+                loop {
+                    let rest = bytes.get(i..).unwrap_or_default();
+                    let Some(offset) = memchr::memchr2(b'"', b'\\', rest) else {
+                        // Unterminated string: the parser rejects it.
+                        return false;
+                    };
+                    let found = rest.get(offset).copied();
+                    i += offset + 1;
+                    if found == Some(b'\\') {
+                        // Skip the escaped character.
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
             b'{' | b'[' => {
                 depth += 1;
                 if depth > max {
@@ -366,6 +374,12 @@ mod tests {
         assert!(!exceeds_depth(br#"{"a":"[[[[[[[[[[\"[[["}"#, 2));
         assert!(exceeds_depth(br#"{"a":[[1]]}"#, 2));
         assert!(!exceeds_depth(br#"{"a":[1]}"#, 2));
+        // An escaped backslash right before the closing quote ends the string.
+        assert!(exceeds_depth(br#"{"a":"x\\","b":[[1]]}"#, 2));
+        // An escaped quote does not end it.
+        assert!(!exceeds_depth(br#"{"a":"\"[[[[","b":1}"#, 2));
+        // Unterminated strings are left to the parser.
+        assert!(!exceeds_depth(br#"{"a":"[[[["#, 2));
     }
 
     #[test]

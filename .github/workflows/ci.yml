@@ -124,6 +124,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo bench -p sdkmcprust-core --no-run
+      - name: Comparative benchmark harness compiles
+        run: cargo build --manifest-path bench/Cargo.toml
 
   conformance:
     name: MCP conformance (2026-07-28)

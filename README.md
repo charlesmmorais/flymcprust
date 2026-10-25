@@ -261,6 +261,32 @@ async fn adds() {
 
 ## Benchmarks
 
+### Against rmcp and the official Python SDK
+
+[`bench/`](bench) runs the same server (same tools, MCP 2026-07-28,
+Streamable HTTP/1.1, JSON responses) written with SDKMCPRust, `rmcp` 3.7.0
+and the official Python SDK `mcp` 2.3.0, under one load generator. Full
+tables, method and caveats: [bench/results/RESULTS.md](bench/results/RESULTS.md).
+
+At 64 concurrent clients (laptop, load generator on the same machine,
+2026-10-25):
+
+| Scenario | SDKMCPRust req/s | rmcp req/s | Python req/s | CPU per request vs rmcp | vs Python |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `tools/list` | 79,051 | 42,164 | 2,024 | 2.3× less | 9.3× less |
+| `tools/call` (trivial tool) | 59,920 | 37,156 | 1,816 | 2.6× less | 9.8× less |
+| `tools/call` (structured output) | 58,258 | 35,098 | 1,702 | 2.3× less | 8.7× less |
+| `tools/call` (64 KiB in and out) | 20,442 | 19,983 | 920 | 1.1× less | 3.8× less |
+
+Idle memory: 5.9 MiB (rmcp 6.3 MiB, Python 78 MiB). Binary: 1.9 MiB (rmcp
+3.4 MiB). Large payloads are on par with rmcp: the time goes into JSON
+parsing and serialization, which both SDKs share through `serde_json`.
+
+Reproduce with `cargo run --release --manifest-path bench/Cargo.toml -p
+mcp-load -- suite` (see [bench/README.md](bench/README.md)).
+
+### Micro-benchmarks
+
 `cargo bench -p sdkmcprust-core` (criterion). Phase 1 baseline, measured on
 2026-10-25 on an Intel Core i5-12450HX laptop (16 GB, Windows 11) with Rust
 1.99.1. Laptop measurements vary by about ±20% between runs because of
@@ -272,10 +298,10 @@ measurable change (MRTR digests are computed only when input is requested).
 | --- | --- | --- |
 | `parse/tools_call_add` | 0.60 µs | JSON-RPC envelope plus limit checks (~300-byte message) |
 | `parse/tools_list` | 0.71 µs | |
-| `parse/tools_call_64KiB` | 48.9 µs | 1.25 GiB/s, including the depth pre-scan |
+| `parse/tools_call_64KiB` | 9.7 µs | Including the depth pre-scan (48.9 µs before it skipped strings with `memchr`) |
 | `dispatch/tools_list` | 1.50 µs | Bytes in → bytes out, catalog of 32 tools |
 | `dispatch/tools_call_add` | 2.76 µs | Bytes in → bytes out: parse, `_meta` validation, argument deserialization, call, serialization |
-| `dispatch/tools_call_64KiB` | 115 µs | Echo of a 64 KiB string |
+| `dispatch/tools_call_64KiB` | 53 µs | Echo of a 64 KiB string (115 µs before the `memchr` scan) |
 | `serialize/call_result` | 0.10 µs | Response envelope |
 
 ## Security

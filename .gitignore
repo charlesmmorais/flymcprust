@@ -7,3 +7,6 @@
 .DS_Store
 .idea/
 .vscode/
+/bench/target
+.venv/
+__pycache__/

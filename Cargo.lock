@@ -913,6 +913,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "inventory",
+ "memchr",
  "schemars",
  "sdkmcprust-spec",
  "serde",

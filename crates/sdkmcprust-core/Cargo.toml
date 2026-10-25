@@ -19,6 +19,7 @@ bytes = { workspace = true, optional = true }
 futures-util.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
+memchr.workspace = true
 http = { workspace = true, optional = true }
 http-body = { workspace = true, optional = true }
 http-body-util = { workspace = true, optional = true }

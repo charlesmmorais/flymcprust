@@ -1,0 +1,30 @@
+# Comparative benchmarks (SDKMCPRust vs rmcp vs the official Python SDK).
+# Runs weekly and on demand; results are uploaded as an artifact. Shared CI
+# runners are noisy: use these runs to spot regressions, and a quiet machine
+# for published numbers (see bench/README.md).
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bench
+      - uses: astral-sh/setup-uv@v6
+      - run: cargo build --release --manifest-path bench/Cargo.toml
+      - run: uv sync --project bench/servers/python
+      - run: echo "BENCH_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
+      - run: cargo run --release --manifest-path bench/Cargo.toml -p mcp-load -- suite --out bench/results
+      - run: python3 bench/report.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench/results/
