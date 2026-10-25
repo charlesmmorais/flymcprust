@@ -37,6 +37,7 @@
 //! | `stdio` | no | stdio transport ([`Server::serve_stdio`]). |
 //! | `http` | no | Streamable HTTP transport ([`transport::http`]). |
 //! | `auto-register` | no | [`ServerBuilder::auto_tools`] collects every `#[tool]`. |
+//! | `test-client` | no | In-process `testing::TestClient` for tests. |
 //!
 //! See the repository's `docs/ARCHITECTURE.md` for design decisions.
 #![forbid(unsafe_code)]
@@ -49,6 +50,9 @@ pub use sdkmcprust_core::{
 
 #[cfg(feature = "macros")]
 pub use sdkmcprust_macros::tool;
+
+#[cfg(feature = "test-client")]
+pub use sdkmcprust_core::testing;
 
 /// The most common imports.
 pub mod prelude {

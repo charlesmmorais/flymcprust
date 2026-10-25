@@ -1,6 +1,6 @@
 [package]
 name = "calculadora"
-description = "Example MCP server: a calculator"
+description = "Example MCP server: a calculator (stdio or Streamable HTTP)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,17 @@ license.workspace = true
 publish = false
 
 [dependencies]
-sdkmcprust.workspace = true
+schemars.workspace = true
+sdkmcprust = { workspace = true, features = ["stdio", "http"] }
+serde.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.19", default-features = false, features = ["fmt", "std"] }
+
+[dev-dependencies]
+rmcp = { version = "3.7.0", default-features = false, features = ["client", "transport-child-process"] }
+sdkmcprust = { workspace = true, features = ["test-client"] }
+serde_json.workspace = true
 
 [lints]
 workspace = true

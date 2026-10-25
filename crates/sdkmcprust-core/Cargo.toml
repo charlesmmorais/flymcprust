@@ -47,6 +47,8 @@ http = [
     "tokio/rt",
 ]
 
+## In-process `testing::TestClient` for integration tests.
+test-client = []
 ## Registry used by `ServerBuilder::auto_tools` (see docs/ARCHITECTURE.md §9).
 auto-register = ["dep:inventory"]
 

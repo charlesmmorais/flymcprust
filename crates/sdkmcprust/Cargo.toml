@@ -26,6 +26,8 @@ macros = ["dep:sdkmcprust-macros"]
 stdio = ["sdkmcprust-core/stdio"]
 ## Streamable HTTP transport.
 http = ["sdkmcprust-core/http"]
+## In-process `testing::TestClient` for integration tests.
+test-client = ["sdkmcprust-core/test-client"]
 ## `ServerBuilder::auto_tools()`: register every `#[tool]` in the binary.
 auto-register = ["macros", "sdkmcprust-core/auto-register", "sdkmcprust-macros/auto-register"]
 

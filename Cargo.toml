@@ -60,6 +60,14 @@ print_stdout = "deny"
 print_stderr = "deny"
 dbg_macro = "deny"
 
+# Keep debug builds small: full debug info for workspace crates only at
+# line-table granularity, none for dependencies (MSVC .pdb files are large).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

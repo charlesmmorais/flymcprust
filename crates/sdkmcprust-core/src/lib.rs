@@ -16,6 +16,8 @@ pub mod jsonrpc;
 mod limits;
 mod mirror;
 mod server;
+#[cfg(feature = "test-client")]
+pub mod testing;
 mod tool;
 pub mod transport;
 
