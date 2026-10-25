@@ -225,7 +225,7 @@ let service = StreamableHttpService::with_config(server, config);
 ```rust
 /// The price survey, as an editable table.
 #[resource(
-    "ui://etp/price-survey",
+    "ui://reports/price-table",
     app,
     csp_connect = ["https://api.example.gov.br"],
     prefers_border = true
@@ -235,7 +235,7 @@ fn price_table() -> String {
 }
 
 /// Shows the price survey of an item.
-#[tool(read_only, ui = "ui://etp/price-survey")]
+#[tool(read_only, ui = "ui://reports/price-table")]
 fn price_survey(ctx: Ctx, item: String) -> String {
     // Hosts without MCP Apps (and the model) read this text.
     format!("Price survey of {item}: median R$ 10.00 (5 sources).")

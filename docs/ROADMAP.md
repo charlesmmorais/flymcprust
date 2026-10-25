@@ -82,6 +82,7 @@ minutes" guide.
 - Tasks and subscriptions wait until there is demand; the architecture keeps
   room for them (ARCHITECTURE §12). The README explains why.
 
-MCP Apps (`io.modelcontextprotocol/ui`) moved from this list to done: a
-procurement-study assistant (ETP) needs editable tables and section forms
-that elicitation cannot express.
+MCP Apps (`io.modelcontextprotocol/ui`) moved from this list to done:
+assistants that guide users through long forms, editable tables or
+document previews need richer interfaces than elicitation can express, and
+the extension costs the server little (metadata and an HTML resource).
