@@ -20,6 +20,17 @@ sdkmcprust-core = { path = "crates/sdkmcprust-core", version = "0.1.0" }
 sdkmcprust-macros = { path = "crates/sdkmcprust-macros", version = "0.1.0" }
 sdkmcprust-spec = { path = "crates/sdkmcprust-spec", version = "0.1.0" }
 
+# External crates.
+futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
+schemars = { version = "1.0.4", default-features = false, features = ["std", "derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.140", features = ["raw_value"] }
+thiserror = "2.0.12"
+tokio = { version = "1.47.0", default-features = false }
+tokio-util = { version = "0.7.15", default-features = false }
+tower-service = "0.3.3"
+tracing = { version = "0.1.41", default-features = false, features = ["std"] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

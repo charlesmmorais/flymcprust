@@ -11,7 +11,19 @@ categories.workspace = true
 publish.workspace = true
 
 [dependencies]
+futures-util.workspace = true
+schemars.workspace = true
 sdkmcprust-spec.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
+tokio-util.workspace = true
+tower-service.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [lints]
 workspace = true
