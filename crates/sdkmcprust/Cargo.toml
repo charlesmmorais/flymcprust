@@ -1,0 +1,23 @@
+[package]
+name = "sdkmcprust"
+description = "An ergonomic, safe and fast SDK for Model Context Protocol servers"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[dependencies]
+sdkmcprust-core.workspace = true
+sdkmcprust-macros = { workspace = true, optional = true }
+
+[features]
+default = ["macros"]
+macros = ["dep:sdkmcprust-macros"]
+
+[lints]
+workspace = true
