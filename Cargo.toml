@@ -42,6 +42,7 @@ tokio = { version = "1.47.0", default-features = false }
 tokio-util = { version = "0.7.15", default-features = false }
 tower-service = "0.3.3"
 tracing = { version = "0.1.41", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.19", default-features = false, features = ["fmt", "std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

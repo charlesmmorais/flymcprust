@@ -90,6 +90,22 @@ jobs:
         with:
           command: check all
 
+  features:
+    name: feature combinations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Each feature alone, and none, without warnings
+        run: |
+          cargo clippy -p sdkmcprust --no-default-features -- -D warnings
+          for feature in macros stdio http logging test-client auto-register; do
+            cargo clippy -p sdkmcprust --no-default-features --features "$feature" -- -D warnings
+          done
+
   audit:
     name: cargo-audit
     runs-on: ubuntu-latest

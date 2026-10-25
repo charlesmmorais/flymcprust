@@ -215,7 +215,9 @@ impl Probe {
 
     /// (RSS bytes, accumulated CPU milliseconds) of the process and all its
     /// descendants: on Windows a venv's `python.exe` is a launcher that runs
-    /// the real interpreter as a child process.
+    /// the real interpreter as a child process. Threads, which `sysinfo`
+    /// lists as processes on Linux, are skipped: they share the process's
+    /// memory and their CPU time is already in the process's total.
     fn sample(&mut self) -> Option<(u64, u64)> {
         let root = self.pid?;
         self.system.refresh_processes_specifics(
@@ -231,7 +233,7 @@ impl Probe {
                 self.system
                     .processes()
                     .iter()
-                    .filter(|(_, p)| p.parent() == Some(parent))
+                    .filter(|(_, p)| p.parent() == Some(parent) && p.thread_kind().is_none())
                     .map(|(pid, _)| *pid),
             );
             i += 1;
@@ -527,8 +529,14 @@ async fn suite(quick: bool, out: &Path) -> Result<(), Error> {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     std::fs::create_dir_all(out)?;
+    let python_version = targets(&root)
+        .into_iter()
+        .find(|t| t.name.starts_with("python"))
+        .and_then(|t| Command::new(t.program).arg("--version").output().ok())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
     let report = json!({
         "date": std::env::var("BENCH_DATE").ok(),
+        "python": python_version,
         "machine": machine(),
         "quick": quick,
         "warmup_s": warmup.as_secs_f64(),

@@ -31,7 +31,7 @@ lines += [
     f"cores, {m['memory_gib']:.0f} GiB, {m['os']}. Each point: {data['warmup_s']:.0f} s warm-up, "
     f"{data['duration_s']:.0f} s measured. The load generator runs on the same machine.",
     "",
-    "Versions: SDKMCPRust (this repository), rmcp 3.7.0, mcp 2.3.0 (Python 3.14, uvicorn 0.54.0). "
+    f"Versions: SDKMCPRust (this repository), rmcp 3.7.0, mcp 2.3.0 ({data.get('python') or 'Python'}, uvicorn 0.54.0). "
     "All servers speak MCP 2026-07-28 over Streamable HTTP/1.1 with JSON responses, bound to "
     "127.0.0.1, with release builds for Rust.",
     "",

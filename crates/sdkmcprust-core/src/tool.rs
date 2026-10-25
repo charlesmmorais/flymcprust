@@ -85,6 +85,12 @@ impl ToolDef {
     }
 }
 
+const TIMEOUT_HELP: &str = "raise ServerBuilder::tool_timeout(..) (default 30 s) or make the \
+     handler faster; long work should stop when ctx.is_cancelled() becomes true";
+
+const PANIC_HELP: &str = "the panic message is logged just above; return an error instead of \
+     panicking (the client got a generic error)";
+
 /// What a tool produced.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -223,15 +229,18 @@ impl ToolError {
                 Cow::Owned(format!("Invalid arguments: {details}"))
             }
             ToolErrorKind::Internal(error) => {
-                tracing::error!(tool, error = %error, "tool failed");
+                tracing::error!(
+                    "tool `{tool}` failed: {error}\n  = help: the client saw only a generic \
+                     message; return ToolError::user(\"...\") for errors the model should see"
+                );
                 Cow::Borrowed("The tool failed because of an internal error.")
             }
             ToolErrorKind::Timeout => {
-                tracing::warn!(tool, "tool timed out");
+                tracing::warn!("tool `{tool}` timed out\n  = help: {TIMEOUT_HELP}");
                 Cow::Borrowed("The tool did not finish within the time limit.")
             }
             ToolErrorKind::Panicked => {
-                tracing::error!(tool, "tool panicked");
+                tracing::error!("tool `{tool}` panicked\n  = help: {PANIC_HELP}");
                 Cow::Borrowed("The tool failed because of an internal error.")
             }
         };
@@ -261,15 +270,18 @@ impl ToolError {
                 McpError::request_failed(format!("Invalid arguments: {details}"))
             }
             ToolErrorKind::Internal(error) => {
-                tracing::error!(handler, error = %error, "handler failed");
+                tracing::error!(
+                    "`{handler}` failed: {error}\n  = help: the client saw only a generic \
+                     message; return ToolError::user(\"...\") for errors it should see"
+                );
                 McpError::internal()
             }
             ToolErrorKind::Timeout => {
-                tracing::warn!(handler, "handler timed out");
+                tracing::warn!("`{handler}` timed out\n  = help: {TIMEOUT_HELP}");
                 McpError::internal_with_message("The request did not finish within the time limit.")
             }
             ToolErrorKind::Panicked => {
-                tracing::error!(handler, "handler panicked");
+                tracing::error!("`{handler}` panicked\n  = help: {PANIC_HELP}");
                 McpError::internal()
             }
         }

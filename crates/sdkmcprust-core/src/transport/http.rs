@@ -45,6 +45,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::TransportContext;
 use crate::error::{ErrorKind, McpError};
+use crate::hints::{self, Once};
 use crate::jsonrpc::{self, Message, Rejection, Response as RpcResponse};
 use crate::mirror::ParamKind;
 use crate::server::{McpRequest, Server};
@@ -175,6 +176,17 @@ pub struct StreamableHttpService {
     server: Server,
     config: Arc<HttpConfig>,
     in_flight: Arc<Semaphore>,
+    hints: Arc<Hints>,
+}
+
+/// Which developer hints were already logged.
+#[derive(Debug, Default)]
+struct Hints {
+    origin: Once,
+    host: Once,
+    busy: Once,
+    slow_body: Once,
+    too_large: Once,
 }
 
 impl StreamableHttpService {
@@ -191,6 +203,7 @@ impl StreamableHttpService {
             server,
             in_flight: Arc::new(Semaphore::new(config.max_in_flight)),
             config: Arc::new(config),
+            hints: Arc::default(),
         }
     }
 
@@ -204,7 +217,23 @@ impl StreamableHttpService {
         let cors = match parts.headers.get(header::ORIGIN) {
             None => None,
             Some(origin) if origin_allowed(&self.config.origins, origin) => Some(origin.clone()),
-            Some(_) => {
+            Some(origin) => {
+                hints::warn_once(
+                    &self.hints.origin,
+                    format_args!(
+                        "rejected a request from Origin {} (HTTP 403)",
+                        hints::client_text(origin.to_str().unwrap_or("<not ASCII>"))
+                    ),
+                    match self.config.origins {
+                        AllowedOrigins::Localhost => {
+                            "only localhost origins are accepted by default (DNS-rebinding \
+                             protection); to allow a web app, list it: \
+                             HttpConfig::new().allowed_origins(AllowedOrigins::List(vec![\
+                             \"https://app.example.com\".into()]))"
+                        }
+                        _ => "add the origin to HttpConfig::allowed_origins if it is legitimate",
+                    },
+                );
                 return rpc_error(
                     StatusCode::FORBIDDEN,
                     None,
@@ -214,6 +243,28 @@ impl StreamableHttpService {
             }
         };
         if !host_allowed(&self.config.hosts, &parts) {
+            let host = parts
+                .headers
+                .get(header::HOST)
+                .and_then(|h| h.to_str().ok())
+                .or_else(|| parts.uri.authority().map(http::uri::Authority::as_str))
+                .unwrap_or("<none>");
+            hints::warn_once(
+                &self.hints.host,
+                format_args!(
+                    "rejected a request for Host {} (HTTP 403)",
+                    hints::client_text(host)
+                ),
+                match self.config.hosts {
+                    AllowedHosts::Localhost => {
+                        "only localhost is accepted by default (DNS-rebinding protection); to \
+                         serve other machines, list your host names: \
+                         HttpConfig::new().allowed_hosts(AllowedHosts::List(vec![\
+                         \"mcp.example.com\".into()]))"
+                    }
+                    _ => "add the host name to HttpConfig::allowed_hosts if it is legitimate",
+                },
+            );
             return rpc_error(
                 StatusCode::FORBIDDEN,
                 None,
@@ -253,6 +304,15 @@ impl StreamableHttpService {
 
         // Bounds the memory held by bodies being read or processed.
         let Ok(_permit) = Arc::clone(&self.in_flight).try_acquire_owned() else {
+            hints::warn_once(
+                &self.hints.busy,
+                format_args!(
+                    "rejected a request: {} requests already in flight (HTTP 503)",
+                    self.config.max_in_flight
+                ),
+                "raise HttpConfig::max_in_flight(..) if the machine has room, or run more \
+                 instances",
+            );
             let mut response = rpc_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 None,
@@ -268,6 +328,14 @@ impl StreamableHttpService {
         let limits = self.server.limits();
         let read = Limited::new(body, limits.max_message_bytes).collect();
         let Ok(read) = tokio::time::timeout(self.config.body_timeout, read).await else {
+            hints::warn_once(
+                &self.hints.slow_body,
+                format_args!(
+                    "a client did not send its request body within {:?} (HTTP 408)",
+                    self.config.body_timeout
+                ),
+                "raise HttpConfig::body_timeout(..) if clients on slow networks are expected",
+            );
             return rpc_error(
                 StatusCode::REQUEST_TIMEOUT,
                 None,
@@ -279,6 +347,15 @@ impl StreamableHttpService {
             Ok(collected) => collected.to_bytes(),
             Err(error) => {
                 let (status, message) = if error.downcast_ref::<LengthLimitError>().is_some() {
+                    hints::warn_once(
+                        &self.hints.too_large,
+                        format_args!(
+                            "rejected a request body over the {}-byte message limit (HTTP 413)",
+                            limits.max_message_bytes
+                        ),
+                        "raise ServerBuilder::max_message_bytes(..) if clients legitimately \
+                         send larger arguments",
+                    );
                     (StatusCode::PAYLOAD_TOO_LARGE, "Message too large")
                 } else {
                     (StatusCode::BAD_REQUEST, "Could not read the request body")
@@ -373,8 +450,27 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when the address cannot be bound.
-    pub async fn serve_http(self, addr: impl tokio::net::ToSocketAddrs) -> io::Result<()> {
-        let listener = TcpListener::bind(addr).await?;
+    pub async fn serve_http(
+        self,
+        addr: impl tokio::net::ToSocketAddrs + Clone + std::fmt::Debug,
+    ) -> io::Result<()> {
+        let listener = TcpListener::bind(addr.clone()).await.map_err(|error| {
+            let help = match error.kind() {
+                io::ErrorKind::AddrInUse => {
+                    "another program (or another copy of this server) is \
+                     already using this port; stop it or choose another port"
+                }
+                io::ErrorKind::PermissionDenied => {
+                    "ports below 1024 usually need elevated \
+                     privileges; choose a port such as 8000"
+                }
+                _ => "check the address, for example `127.0.0.1:8000`",
+            };
+            io::Error::new(
+                error.kind(),
+                format!("could not listen on {addr:?}: {error}\n  = help: {help}"),
+            )
+        })?;
         serve(
             listener,
             StreamableHttpService::new(self),
@@ -406,8 +502,10 @@ pub async fn serve(
         && service.config.hosts == AllowedHosts::Localhost
     {
         tracing::warn!(
-            %addr,
-            "listening on a non-loopback address while only localhost Host headers are allowed"
+            "listening on {addr}, but only requests addressed to localhost are accepted\n  \
+             = help: other machines will get HTTP 403; list the host names they use with \
+             HttpConfig::allowed_hosts and serve with StreamableHttpService::with_config, or \
+             bind 127.0.0.1"
         );
     }
 
@@ -676,6 +774,11 @@ fn origin_allowed(allowed: &AllowedOrigins, origin: &HeaderValue) -> bool {
 }
 
 fn host_allowed(allowed: &AllowedHosts, parts: &http::request::Parts) -> bool {
+    // RFC 9112 §3.2: a request with several `Host` headers is invalid. Only
+    // the first would be checked, while an intermediary might use another.
+    if parts.headers.get_all(header::HOST).iter().nth(1).is_some() {
+        return false;
+    }
     if *allowed == AllowedHosts::Any {
         return true;
     }

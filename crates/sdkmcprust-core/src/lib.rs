@@ -13,6 +13,7 @@ mod completion;
 mod context;
 mod error;
 mod extension;
+mod hints;
 pub mod jsonrpc;
 mod limits;
 mod mirror;

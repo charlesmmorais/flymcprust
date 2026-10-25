@@ -19,6 +19,7 @@ use crate::completion::{Completer, CompletionRequest};
 use crate::context::{Ctx, RequestMeta, TransportContext, TypeMap};
 use crate::error::McpError;
 use crate::extension::{self, Extension};
+use crate::hints::{self, Once};
 use crate::jsonrpc::{self, Message, Rejection, Request, Response};
 use crate::limits::Limits;
 use crate::mirror::{self, MirroredParam};
@@ -33,7 +34,11 @@ use crate::uri_template::{self, UriTemplate, UriVars};
 const COMPLETE: &str = "complete";
 
 /// Errors detected while building a server.
-#[derive(Debug, thiserror::Error)]
+///
+/// `Display` gives the problem in one line; [`BuildError::help`] says how to
+/// fix it. `Debug` prints both, so `fn main() -> Result<..>` with
+/// `.build()?` shows the fix too.
+#[derive(thiserror::Error)]
 #[non_exhaustive]
 pub enum BuildError {
     /// Two tools share a name.
@@ -43,7 +48,7 @@ pub enum BuildError {
     #[error("invalid tool name `{0}`: use 1-128 characters from A-Z, a-z, 0-9, `_`, `-` and `.`")]
     InvalidToolName(String),
     /// A handler needs shared state that was not registered.
-    #[error("`{handler}` needs state of type `{type_name}`; register it with `.state(..)`")]
+    #[error("`{handler}` needs shared state of type `{type_name}`, which is not registered")]
     MissingState {
         /// The tool or prompt name, or the resource URI.
         handler: String,
@@ -99,6 +104,69 @@ pub enum BuildError {
     /// A pre-serialized response could not be built.
     #[error("could not serialize {0}")]
     Serialize(&'static str, #[source] serde_json::Error),
+}
+
+impl BuildError {
+    /// How to fix the problem.
+    #[must_use]
+    pub fn help(&self) -> String {
+        match self {
+            Self::DuplicateTool(name) => format!(
+                "rename one of the tools with #[tool(name = \"...\")], or check that `{name}` \
+                 is not registered twice (for example with `.tool::<..>()` and `.auto_tools()`)"
+            ),
+            Self::InvalidToolName(_) => "tool names travel in HTTP headers; rename the tool with \
+                 #[tool(name = \"...\")] using only those characters"
+                .to_owned(),
+            Self::MissingState { type_name, .. } => format!(
+                "register a value before `.build()`: `Server::builder(..).state(value)`, \
+                 where `value: {type_name}`"
+            ),
+            Self::InvalidResource { .. } => "fixed URIs need a scheme, such as `config://app` or \
+                 `file:///notes.txt`; templates support `{var}`, `{+var}`, `{/var}` and a final \
+                 `{?query}` (see the `UriTemplate` docs)"
+                .to_owned(),
+            Self::DuplicateResource(_) => {
+                "each URI and each URI template can be registered only once".to_owned()
+            }
+            Self::DuplicatePrompt(_) => {
+                "rename one of the prompts with #[prompt(name = \"...\")]".to_owned()
+            }
+            Self::InvalidPromptName(_) => {
+                "use a non-empty name without control characters".to_owned()
+            }
+            Self::InvalidCompletion { owner, .. } => format!(
+                "#[complete(..)] and `.complete(..)` must name an argument (prompts) or a \
+                 template variable (resources) of `{owner}`"
+            ),
+            Self::InvalidHeaderAnnotation { .. } => "`x-mcp-header` takes an HTTP header name \
+                 (letters, digits and `-`) on a string, integer or boolean property reached \
+                 only through `properties`"
+                .to_owned(),
+            Self::InvalidExtension(_) => "extension identifiers look like \
+                 `com.example/my-extension` and can be registered only once"
+                .to_owned(),
+            Self::InvalidLimit(_) => "limits must be positive; see `max_message_bytes`, \
+                 `max_json_depth`, `tool_timeout` and `max_concurrent_calls` on the builder"
+                .to_owned(),
+            Self::WeakRequestStateKey => format!(
+                "use at least {MIN_REQUEST_STATE_KEY_BYTES} random bytes from your secret store, \
+                 and the same key on every instance"
+            ),
+            Self::RandomUnavailable(_) => "the operating system did not provide randomness; set \
+                 a key explicitly with `.request_state_key(..)`"
+                .to_owned(),
+            Self::Serialize(..) => "a definition built by hand contains a value JSON cannot \
+                 represent (such as a NaN number); if it came from a macro, please report a bug"
+                .to_owned(),
+        }
+    }
+}
+
+impl std::fmt::Debug for BuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}\n  = help: {}", self.help())
+    }
 }
 
 /// Builds a [`Server`].
@@ -509,6 +577,8 @@ impl ServerBuilder {
                 prompts: prompts.registry,
                 has_completions,
                 state_codec,
+                legacy_hint: Once::new(),
+                state_hint: Once::new(),
                 discover,
                 tools_list,
                 resources_list,
@@ -544,6 +614,8 @@ struct Inner {
     prompts: Box<[RegisteredPrompt]>,
     has_completions: bool,
     state_codec: StateCodec,
+    legacy_hint: Once,
+    state_hint: Once,
     discover: Box<RawValue>,
     tools_list: Box<RawValue>,
     resources_list: Option<Box<RawValue>>,
@@ -967,11 +1039,24 @@ impl Server {
                 self.validate_meta(p.meta.take())?;
                 self.complete(p).map(Some)
             }
-            "initialize" => Err(McpError::method_not_found_explained(format!(
-                "This server implements the stateless MCP protocol (versions: {}); \
+            "initialize" => {
+                hints::warn_once(
+                    &self.inner.legacy_hint,
+                    format_args!(
+                        "a client tried to connect with `initialize` (MCP 2025-11-25 or older); \
+                         this server speaks {} only",
+                        self.inner.supported_versions.join(", ")
+                    ),
+                    "use a client that supports MCP 2026-07-28 (the MCP Inspector needs \
+                     `--protocol-era modern`); support for older clients is planned \
+                     (docs/ROADMAP.md)",
+                );
+                Err(McpError::method_not_found_explained(format!(
+                    "This server implements the stateless MCP protocol (versions: {}); \
                      `initialize` is not supported",
-                self.inner.supported_versions.join(", ")
-            ))),
+                    self.inner.supported_versions.join(", ")
+                )))
+            }
             other => Err(McpError::method_not_found(other)),
         }
     }
@@ -1049,7 +1134,20 @@ impl Server {
         input_responses: Option<Value>,
         request_state: Option<&str>,
     ) -> Result<Arc<Round>, McpError> {
-        Round::start(&self.inner.state_codec, key, input_responses, request_state).map(Arc::new)
+        let has_state = request_state.is_some();
+        Round::start(&self.inner.state_codec, key, input_responses, request_state)
+            .map(Arc::new)
+            .inspect_err(|_| {
+                if has_state {
+                    hints::warn_once(
+                        &self.inner.state_hint,
+                        format_args!("rejected a requestState that failed verification"),
+                        "if this server runs as several instances, give all of them the same \
+                         key with ServerBuilder::request_state_key(..); otherwise the client \
+                         sent an expired or modified state (or retried another request)",
+                    );
+                }
+            })
     }
 
     /// Turns the "input required" signal into an `InputRequiredResult`;

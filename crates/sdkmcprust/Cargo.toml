@@ -20,6 +20,7 @@ sdkmcprust-core.workspace = true
 sdkmcprust-macros = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
 
 [features]
 default = ["macros"]
@@ -29,6 +30,8 @@ macros = ["dep:sdkmcprust-macros"]
 stdio = ["sdkmcprust-core/stdio"]
 ## Streamable HTTP transport.
 http = ["sdkmcprust-core/http"]
+## `logging::init()`: write the SDK's log (including fix-it hints) to stderr.
+logging = ["dep:tracing-subscriber"]
 ## In-process `testing::TestClient` for integration tests.
 test-client = ["sdkmcprust-core/test-client"]
 ## `ServerBuilder::auto_tools()`: register every `#[tool]` in the binary.

@@ -23,6 +23,9 @@ round-trip requests over stdio and Streamable HTTP). Not published yet.
 
 ## Quick start
 
+New to MCP or to this SDK? Follow
+[From zero to an MCP server in Rust in 5 minutes](docs/QUICKSTART.md).
+
 ```toml
 [dependencies]
 sdkmcprust = { git = "…", features = ["stdio"] }
@@ -151,6 +154,7 @@ async fn deploy(ctx: Ctx, env: String) -> Result<String, ToolError> {
 | `stdio` | no | stdio transport. |
 | `http` | no | Streamable HTTP transport (`tower::Service` plus a hyper server). |
 | `auto-register` | no | `auto_tools()`, `auto_resources()` and `auto_prompts()` on the builder. |
+| `logging` | no | `logging::init()`: the log, with fix-it hints, on stderr. |
 | `test-client` | no | In-process `testing::TestClient` for integration tests. |
 
 ## Protocol support (2026-07-28)

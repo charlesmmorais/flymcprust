@@ -37,6 +37,7 @@
 //! | `stdio` | no | stdio transport ([`Server::serve_stdio`]). |
 //! | `http` | no | Streamable HTTP transport ([`transport::http`]). |
 //! | `auto-register` | no | [`ServerBuilder::auto_tools`] (and `auto_resources`, `auto_prompts`) collect every annotated item. |
+//! | `logging` | no | `logging::init()` writes the log, with fix-it hints, to stderr. |
 //! | `test-client` | no | In-process `testing::TestClient` for tests. |
 //!
 //! See the repository's `docs/ARCHITECTURE.md` for design decisions.
@@ -56,6 +57,33 @@ pub use sdkmcprust_macros::{prompt, resource, tool};
 
 #[cfg(feature = "test-client")]
 pub use sdkmcprust_core::testing;
+
+/// Logging setup (feature `logging`).
+#[cfg(feature = "logging")]
+pub mod logging {
+    /// Sends the SDK's log to stderr: warnings and errors come with a
+    /// `help:` line that says how to fix them. stdout stays reserved for the
+    /// stdio transport.
+    ///
+    /// The level comes from `RUST_LOG` (`error`, `warn`, `info`, `debug` or
+    /// `trace`; default `info`). Does nothing if a global subscriber is
+    /// already installed.
+    pub fn init() {
+        let level = std::env::var("RUST_LOG")
+            .ok()
+            .and_then(|v| {
+                v.trim()
+                    .parse::<tracing_subscriber::filter::LevelFilter>()
+                    .ok()
+            })
+            .unwrap_or(tracing_subscriber::filter::LevelFilter::INFO);
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_max_level(level)
+            .with_target(false)
+            .try_init();
+    }
+}
 
 /// The most common imports.
 pub mod prelude {

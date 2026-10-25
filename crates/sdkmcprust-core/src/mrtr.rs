@@ -458,6 +458,16 @@ impl Ctx {
             ),
         };
         if !supported {
+            static HINT: crate::hints::Once = crate::hints::Once::new();
+            crate::hints::warn_once(
+                &HINT,
+                format_args!(
+                    "a client that did not declare the needed capability called a handler \
+                     that asks it for input; it received -32021"
+                ),
+                "check ctx.client_capabilities() before asking if the handler can work \
+                 without the answer",
+            );
             return ToolError::missing_client_capability(&required);
         }
         round.push(key, request);
@@ -479,7 +489,8 @@ fn elicitation_schema<T: JsonSchema>() -> Result<Value, ToolError> {
     let mut schema = schema_for::<T>();
     let unsupported = || {
         ToolError::internal(std::io::Error::other(format!(
-            "`{}` cannot be elicited: use a struct of string, number, integer, boolean or enum fields",
+            "`{}` cannot be used with ctx.elicit\n  = help: use a struct whose fields are strings, \
+             numbers, integers, booleans or enums (optionally in Option<..>); forms cannot nest",
             std::any::type_name::<T>()
         )))
     };

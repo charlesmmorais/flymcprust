@@ -449,6 +449,27 @@ async fn tools_can_return_protocol_errors() {
 }
 
 #[test]
+fn build_errors_say_how_to_fix_them() {
+    struct Db;
+    let error = ServerBuilder::new("s", "1")
+        .tool_def(simple("needs_db", needs_sampling).require_state::<Db>())
+        .build()
+        .unwrap_err();
+    // `fn main() -> Result<..>` prints `Debug`: it must be readable and
+    // include the fix.
+    let shown = format!("{error:?}");
+    assert!(
+        shown.starts_with("`needs_db` needs shared state of type"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("= help: register a value before `.build()`"),
+        "{shown}"
+    );
+    assert!(!format!("{error}").contains("help"));
+}
+
+#[test]
 fn build_validates_configuration() {
     let dup = ServerBuilder::new("s", "1")
         .tool_def(add_def())

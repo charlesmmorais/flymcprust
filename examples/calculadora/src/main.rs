@@ -12,16 +12,14 @@ const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:8000";
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Logs go to stderr: on stdio, stdout carries MCP messages only.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .init();
+    // Logs (with fix-it hints) go to stderr: on stdio, stdout carries MCP
+    // messages only.
+    sdkmcprust::logging::init();
 
     let server = match calculadora::server() {
         Ok(server) => server,
         Err(error) => {
-            tracing::error!(%error, "invalid server configuration");
+            tracing::error!("invalid server configuration: {error:?}");
             return ExitCode::FAILURE;
         }
     };

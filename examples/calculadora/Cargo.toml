@@ -9,11 +9,10 @@ publish = false
 
 [dependencies]
 schemars.workspace = true
-sdkmcprust = { workspace = true, features = ["stdio", "http"] }
+sdkmcprust = { workspace = true, features = ["stdio", "http", "logging"] }
 serde.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing.workspace = true
-tracing-subscriber = { version = "0.3.19", default-features = false, features = ["fmt", "std"] }
 
 [dev-dependencies]
 rmcp = { version = "3.7.0", default-features = false, features = ["client", "transport-child-process"] }

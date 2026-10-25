@@ -36,12 +36,37 @@ impl Server {
     /// Serves requests over the process's stdin and stdout until stdin is
     /// closed.
     ///
+    /// When stdin is an interactive terminal (someone ran the server by
+    /// hand), a short explanation is printed on stderr: an MCP server waits
+    /// silently for JSON-RPC messages, which looks like a hang.
+    ///
     /// # Errors
     ///
     /// Returns an error when reading stdin or writing stdout fails.
     pub async fn serve_stdio(self) -> io::Result<()> {
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            explain_interactive_use();
+        }
         serve_io(self, tokio::io::stdin(), tokio::io::stdout()).await
     }
+}
+
+/// Tells someone who started the server in a terminal what is going on.
+// stderr is safe here: stdout is the protocol channel, stderr is not.
+#[allow(clippy::print_stderr)]
+fn explain_interactive_use() {
+    let program = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "this-server".to_owned());
+    eprintln!(
+        "This is an MCP server: it reads JSON-RPC messages on stdin and is meant to be \
+         started by an MCP client.\n  \
+         = help: try it with the MCP Inspector:\n          \
+         npx @modelcontextprotocol/inspector --cli path/to/{program} --protocol-era modern \
+         --method tools/list\n\
+         (Waiting for messages on stdin; press Ctrl+C to stop.)"
+    );
 }
 
 /// Serves requests over any byte stream pair using the stdio framing (for
