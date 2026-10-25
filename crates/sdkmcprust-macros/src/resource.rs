@@ -23,6 +23,7 @@ struct ResourceArgs {
     mime_type: Option<LitStr>,
     ttl_ms: Option<LitInt>,
     cache: Option<LitStr>,
+    scopes: Option<Vec<LitStr>>,
 }
 
 fn parse_args(attr: TokenStream) -> syn::Result<ResourceArgs> {
@@ -67,11 +68,12 @@ fn parse_args(attr: TokenStream) -> syn::Result<ResourceArgs> {
                 }
                 params::set_once(&mut args.cache, key, lit)?;
             }
+            "scopes" => params::set_once(&mut args.scopes, key, params::scopes(key, value)?)?,
             _ => {
                 return Err(Error::new(
                     key.span(),
                     "unknown `resource` argument; expected a URI string, `template`, `name`, \
-                     `title`, `description`, `mime_type`, `ttl_ms` or `cache`",
+                     `title`, `description`, `mime_type`, `ttl_ms`, `cache` or `scopes`",
                 ));
             }
         }
@@ -154,6 +156,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     params::check_signature(&func, OPTIONS.macro_name)?;
     let params = params::collect_params(&mut func, &OPTIONS)?;
     let krate = params::krate();
+    let scopes = params::scopes_call(args.scopes.as_ref());
     let fn_ident = &func.sig.ident;
     let vis = &func.vis;
 
@@ -343,6 +346,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                 { #definition }
                     #ttl
                     #cache
+                    #scopes
                     #(.require_state::<#state_types>())*
                     #(#complete_regs)*
             }

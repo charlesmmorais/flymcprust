@@ -7,6 +7,7 @@
 //! bytes. See `docs/ARCHITECTURE.md` for the design.
 #![forbid(unsafe_code)]
 
+pub mod auth;
 #[cfg(feature = "auto-register")]
 mod auto;
 mod completion;
@@ -33,6 +34,7 @@ mod uri_template;
 /// Protocol types of the targeted revision.
 pub use sdkmcprust_spec::v2026_07_28 as spec;
 
+pub use auth::{Principal, TokenError, TokenVerifier};
 pub use completion::{CompleteFn, Completion, CompletionRequest, MAX_COMPLETION_VALUES};
 pub use context::{Ctx, State, TransportContext};
 pub use error::{ErrorKind, McpError};

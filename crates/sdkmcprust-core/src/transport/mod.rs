@@ -3,5 +3,7 @@
 
 #[cfg(feature = "http")]
 pub mod http;
+#[cfg(feature = "http")]
+mod oauth;
 #[cfg(feature = "stdio")]
 pub mod stdio;

@@ -27,6 +27,9 @@ pub enum ErrorKind {
     Failed,
     /// A server-side failure.
     Internal,
+    /// The access token lacks scopes the request needs (HTTP 403 with an
+    /// `insufficient_scope` challenge).
+    Forbidden,
 }
 
 /// A JSON-RPC error returned to the client.
@@ -158,6 +161,31 @@ impl McpError {
             ErrorKind::Internal,
             "Internal error",
         )
+    }
+
+    /// `-32600` with `data.requiredScopes`: the access token does not grant
+    /// every scope the handler needs. Over HTTP this is a `403` whose
+    /// `WWW-Authenticate` challenge lists the scopes.
+    #[must_use]
+    pub fn insufficient_scope(required: &[String]) -> Self {
+        let mut err = Self::new(
+            error_codes::INVALID_REQUEST_ERROR,
+            ErrorKind::Forbidden,
+            "Insufficient scope",
+        );
+        err.data = Some(Box::new(json!({ "requiredScopes": required })));
+        err
+    }
+
+    /// The scopes listed by [`insufficient_scope`](Self::insufficient_scope).
+    #[cfg_attr(not(feature = "http"), allow(dead_code))]
+    pub(crate) fn required_scopes(&self) -> Vec<&str> {
+        self.data
+            .as_deref()
+            .and_then(|d| d.get("requiredScopes"))
+            .and_then(Value::as_array)
+            .map(|scopes| scopes.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default()
     }
 
     /// `-32020`: HTTP headers do not match the request body.

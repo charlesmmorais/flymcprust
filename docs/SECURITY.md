@@ -19,10 +19,9 @@ runs handler code (tools, resources, prompts) written by the application.
 | Network peers | **Untrusted.** They can open connections, send slowly, or send nothing. |
 | stdio parent process | Trusted to launch the server; its messages are still validated like any client's. |
 
-Out of scope: TLS termination and authentication (OAuth is a planned phase;
-until then, put a reverse proxy with TLS and authentication in front of any
-non-local deployment), sandboxing of handler code, and side channels of the
-host.
+Out of scope: TLS termination (put a reverse proxy with TLS in front of any
+non-local deployment), the authorization server itself, sandboxing of
+handler code, and side channels of the host.
 
 ## 2. Threats and controls
 
@@ -38,6 +37,8 @@ host.
 | Forged legacy sessions or answers (2025-11-25 clients) | `MCP-Session-Id` tokens are HMAC-signed (separate signing context from `requestState`), expire after 24 h and carry a random nonce, so they are unique and cannot be forged or altered; invalid ones get `404`. Server-to-client requests use random 128-bit ids bound to the session that caused them, so another client cannot answer them. |
 | Forged or replayed `requestState` (MRTR) | HMAC-SHA256 with a 256-bit random key (or a configured one of at least 32 bytes), verified in constant time before parsing; bound to method, target, argument digest and expiry (10 min); only answers the handler actually read are carried forward. |
 | Flooding a slow client with notifications | Notifications never block handlers: log messages beyond a 32-message buffer are dropped and progress keeps only the latest value; nothing is sent after the response. |
+| Unauthenticated remote access (with `HttpConfig::oauth`) | Every request needs a bearer token checked by the application's `TokenVerifier` before the body is read; `401` with a challenge otherwise. Tokens are length-limited (16 KiB) and character-checked before verification; several `Authorization` headers get `400`; verification is bounded (10 s). Rejection reasons are logged, never sent. Handler scopes are checked before the handler runs (`403`). |
+| A user replaying another user's `requestState` or legacy session | Both tokens carry a digest of the authenticated issuer and subject and are rejected with another principal's token. |
 | Requests for input the client cannot serve | Client capabilities checked before any input request (`-32021`). |
 | Supply chain | `cargo-deny` (licenses, advisories, bans, sources) and `cargo-audit` in CI; protocol schema pinned by SHA-256. |
 
@@ -45,9 +46,13 @@ host.
 
 The SDK cannot enforce these; applications must:
 
-1. **Authenticate remote access.** The HTTP transport has no authentication
-   yet. Keep it on loopback, or front it with TLS and authentication. Do not
-   use `AllowedOrigins::Any` without authentication.
+1. **Authenticate remote access.** Keep the HTTP transport on loopback, or
+   require OAuth with `HttpConfig::oauth` (or an authenticating proxy) and
+   serve it over TLS. Do not use `AllowedOrigins::Any` without
+   authentication. A `TokenVerifier` must check the token's signature,
+   expiry and audience (this server): the specification forbids accepting
+   tokens issued for other resources, and passing tokens through to other
+   services.
 2. **Confine files.** Pass any client-provided path through
    `security::confine_path`.
 3. **Make code before `ctx.elicit` idempotent.** Handlers rerun from the
@@ -69,9 +74,9 @@ The SDK cannot enforce these; applications must:
   `405`); rotating the key ends all of them. A legacy request without a session
   is served with no client capabilities.
 
-- `requestState` is not yet bound to the authenticated principal (a spec
-  SHOULD); this comes with OAuth. Within its 10-minute lifetime, a state can
-  be replayed by whoever holds it, on the same request.
+- Without OAuth, `requestState` is not bound to a user: within its
+  10-minute lifetime, a state can be replayed by whoever holds it, on the
+  same request.
 - The built-in HTTP server speaks HTTP/1.1 only. For HTTP/2, mount
   `StreamableHttpService` in another server and configure its timeouts.
 - Signing keys are not zeroized in memory.

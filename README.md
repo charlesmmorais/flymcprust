@@ -3,8 +3,12 @@
 > Working title. A Rust SDK for building [Model Context Protocol](https://modelcontextprotocol.io)
 > servers, with the ergonomics of FastMCP and the guarantees of Rust.
 
-**Status:** phase 2 (tools, resources, prompts, completion and multi
-round-trip requests over stdio and Streamable HTTP). Not published yet.
+**Status:** complete MCP server SDK for protocol 2026-07-28 (all 147 checks
+of the official conformance suite pass) that also serves 2025-11-25 and
+2025-06-18 clients: tools, resources, prompts, completion, multi round-trip
+requests, progress and logging, over stdio and Streamable HTTP. Phase 6
+(OAuth authorization) is in progress; see the [roadmap](docs/ROADMAP.md).
+Not published on crates.io yet.
 
 - **Spec-first.** Targets MCP revision **2026-07-28**: stateless, with no
   `initialize` and no sessions. Clients of 2025-11-25 and 2025-06-18 work too,
@@ -169,6 +173,45 @@ async fn import(ctx: Ctx, files: Vec<String>) -> Result<String, ToolError> {
   is deprecated like MCP logging itself (SEP-2577): log to stderr with
   `tracing` instead.
 
+### Requiring OAuth (HTTP)
+
+```rust
+use sdkmcprust::transport::http::{AllowedHosts, HttpConfig, OAuth, StreamableHttpService};
+
+/// Deletes a file.
+#[tool(destructive, scopes = ["files:write"])]
+async fn delete_file(ctx: Ctx, path: String) -> Result<String, ToolError> {
+    let user = ctx.principal().map(|p| p.subject().to_owned());
+    // ...
+}
+
+let oauth = OAuth::builder("https://mcp.example.com/mcp", my_verifier)
+    .authorization_server("https://auth.example.com")
+    .scopes_supported(["mcp"])
+    .required_scopes(["mcp"])
+    .build()?;
+let config = HttpConfig::new()
+    .allowed_hosts(AllowedHosts::List(vec!["mcp.example.com".into()]))
+    .oauth(oauth);
+let service = StreamableHttpService::with_config(server, config);
+```
+
+- The server is an OAuth 2.1 resource server. Requests without a valid
+  bearer token get `401` with a `WWW-Authenticate` challenge that points to
+  the Protected Resource Metadata document (RFC 9728), which `serve`
+  publishes at `/.well-known/oauth-protected-resource/mcp`.
+- `scopes = [..]` on `#[tool]`, `#[resource]` or `#[prompt]`: callers without
+  every listed scope get `403` with an `insufficient_scope` challenge naming
+  all of them. `.scope_implies(..)` declares hierarchies such as `files`
+  implying `files:read`.
+- `my_verifier` implements `TokenVerifier` (a closure
+  `Fn(&str) -> Result<Principal, TokenError>` works). It must check that the
+  token was issued for this server.
+- `requestState` and legacy sessions are bound to the user: a state or
+  session obtained with one user's token is rejected with another's.
+- stdio is not authorized this way: per the specification, it takes
+  credentials from its environment.
+
 ## Features
 
 | Feature | Default | Description |
@@ -197,7 +240,8 @@ async fn import(ctx: Ctx, files: Vec<String>) -> Result<String, ToolError> {
 | Completion (`completion/complete`) | ✅ |
 | Multi round-trip requests: elicitation, sampling, roots; signed `requestState` | ✅ |
 | Progress (`notifications/progress`), logging (`notifications/message`, deprecated), SSE response streaming | ✅ |
-| Subscriptions, Tasks, Apps, OAuth | Planned; the architecture already reserves their place ([ARCHITECTURE](docs/ARCHITECTURE.md) §12) |
+| OAuth 2.1 authorization (resource server): bearer tokens, RFC 9728 metadata, `401`/`403` challenges, per-handler scopes | ✅ (bring a `TokenVerifier`; a built-in JWT verifier is in progress) |
+| Subscriptions, Tasks, MCP Apps | Not planned until there is demand; the architecture reserves their place ([ARCHITECTURE](docs/ARCHITECTURE.md) §12) |
 | 2025-11-25 and 2025-06-18 clients: `initialize`, `ping`, signed sessions, `ctx.elicit` as server-to-client requests (stdio and SSE) | ✅ (on by default; `legacy_clients(false)` turns it off) |
 
 ### Official conformance suite
@@ -326,12 +370,12 @@ mcp-load -- suite` (see [bench/README.md](bench/README.md)).
 
 ### Micro-benchmarks
 
-`cargo bench -p sdkmcprust-core` (criterion). Phase 1 baseline, measured on
-2026-10-25 on an Intel Core i5-12450HX laptop (16 GB, Windows 11) with Rust
-1.99.1. Laptop measurements vary by about ±20% between runs because of
-thermal throttling. Phase 2 was compared with this code by interleaving runs
-of both versions on the same machine: the `tools/call` path showed no
-measurable change (MRTR digests are computed only when input is requested).
+`cargo bench -p sdkmcprust-core` (criterion), measured on 2026-10-25 on an
+Intel Core i5-12450HX laptop (16 GB, Windows 11) with Rust 1.99.1. Laptop
+measurements vary by about ±20% between runs because of thermal throttling.
+Each phase is checked against the previous code (interleaved runs, plus the
+comparative suite): features such as multi round-trip requests, notifications
+and legacy clients cost nothing on requests that do not use them.
 
 | Benchmark | Median time | Notes |
 | --- | --- | --- |

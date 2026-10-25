@@ -51,6 +51,9 @@ use tokio::net::TcpListener;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
+use super::oauth::Challenge;
+pub use super::oauth::{OAuth, OAuthBuilder, OAuthError, ProtectedResourceMetadata};
+use crate::auth::AuthContext;
 use crate::context::TransportContext;
 use crate::error::{ErrorKind, McpError};
 use crate::hints::{self, Once};
@@ -71,7 +74,7 @@ enum BodyKind {
 }
 
 impl HttpBody {
-    fn full(bytes: impl Into<Bytes>) -> Self {
+    pub(crate) fn full(bytes: impl Into<Bytes>) -> Self {
         Self(BodyKind::Full(Full::new(bytes.into())))
     }
 }
@@ -151,8 +154,9 @@ pub enum AllowedHosts {
 }
 
 /// Security settings of the Streamable HTTP transport.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct HttpConfig {
+    oauth: Option<OAuth>,
     origins: AllowedOrigins,
     hosts: AllowedHosts,
     header_timeout: Duration,
@@ -164,6 +168,7 @@ pub struct HttpConfig {
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {
+            oauth: None,
             origins: AllowedOrigins::Localhost,
             hosts: AllowedHosts::Localhost,
             header_timeout: Duration::from_secs(10),
@@ -179,6 +184,14 @@ impl HttpConfig {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Requires OAuth 2.1 access tokens on every request (the server acts
+    /// as a resource server). See [`OAuth`].
+    #[must_use]
+    pub fn oauth(mut self, oauth: OAuth) -> Self {
+        self.oauth = Some(oauth);
+        self
     }
 
     /// Sets the accepted `Origin` values.
@@ -263,6 +276,29 @@ impl StreamableHttpService {
     /// Wraps a server with explicit security settings.
     #[must_use]
     pub fn with_config(server: Server, config: HttpConfig) -> Self {
+        match &config.oauth {
+            None if server.has_scopes() => tracing::warn!(
+                "handlers declare OAuth scopes, but this HTTP service does not require OAuth: \
+                 the scopes are not enforced\n  = help: add HttpConfig::new().oauth(OAuth::\
+                 builder(..)..build()?), or remove the scopes"
+            ),
+            Some(oauth) => {
+                let host = oauth
+                    .resource()
+                    .split_once("://")
+                    .map(|(_, rest)| rest.split(['/', '?']).next().unwrap_or_default())
+                    .unwrap_or_default();
+                if !host_name_allowed(&config.hosts, strip_port(host)) {
+                    tracing::warn!(
+                        "the OAuth resource {} is not on an allowed host, so its requests \
+                         will get HTTP 403\n  = help: list the host with \
+                         HttpConfig::allowed_hosts(AllowedHosts::List(..))",
+                        oauth.resource()
+                    );
+                }
+            }
+            None => {}
+        }
         Self {
             server,
             in_flight: Arc::new(Semaphore::new(config.max_in_flight)),
@@ -390,6 +426,16 @@ impl StreamableHttpService {
             return response;
         };
 
+        // Authorization comes before the body is read: unauthenticated
+        // clients cannot make the server buffer their messages.
+        let auth = match &self.config.oauth {
+            None => None,
+            Some(oauth) => match oauth.authenticate(&parts.headers).await {
+                Ok(auth) => Some(auth),
+                Err(challenge) => return challenge_response(oauth, &challenge, cors.as_ref()),
+            },
+        };
+
         let limits = self.server.limits();
         let read = Limited::new(body, limits.max_message_bytes).collect();
         let Ok(read) = tokio::time::timeout(self.config.body_timeout, read).await else {
@@ -435,7 +481,7 @@ impl StreamableHttpService {
         };
 
         // Legacy clients: a session token, or a legacy version header.
-        let legacy = match self.legacy_session(&parts.headers) {
+        let legacy = match self.legacy_session(&parts.headers, auth.as_ref()) {
             Ok(legacy) => legacy,
             Err(response) => return *response,
         };
@@ -489,7 +535,7 @@ impl StreamableHttpService {
             && request.method == "initialize"
         {
             if self.server.legacy_clients_enabled() && !modern {
-                return self.legacy_initialize(request, cors.as_ref());
+                return self.legacy_initialize(request, cors.as_ref(), auth.as_ref());
             }
             if modern {
                 return rpc_error(
@@ -506,6 +552,9 @@ impl StreamableHttpService {
             let mut transport = TransportContext::new();
             let owner = session_owner(&parts.headers);
             transport.insert(parts);
+            if let Some(auth) = auth {
+                transport.insert(auth);
+            }
             return self
                 .handle_legacy(message, session, owner, transport, permit, cors)
                 .await;
@@ -533,6 +582,9 @@ impl StreamableHttpService {
 
         let mut transport = TransportContext::new();
         transport.insert(parts);
+        if let Some(auth) = auth {
+            transport.insert(auth);
+        }
         if wants_notifications {
             // The client asked for progress or log messages: they can only
             // travel on an SSE response, which closing cancels the request.
@@ -563,14 +615,33 @@ impl StreamableHttpService {
                 cancellation: CancellationToken::new(),
             })
             .await;
+        self.reply(response, cors.as_ref())
+    }
 
-        match response {
-            None => plain(StatusCode::ACCEPTED, cors.as_ref()),
-            Some(response) => {
-                let status = response.as_error().map_or(StatusCode::OK, status_for);
-                json(status, response.to_vec(), cors.as_ref())
-            }
+    /// The HTTP response for a JSON-RPC response (`None`: a notification).
+    /// Scope errors carry an `insufficient_scope` challenge.
+    fn reply(
+        &self,
+        response: Option<RpcResponse>,
+        cors: Option<&HeaderValue>,
+    ) -> Response<HttpBody> {
+        let Some(response) = response else {
+            return plain(StatusCode::ACCEPTED, cors);
+        };
+        let status = response.as_error().map_or(StatusCode::OK, status_for);
+        let challenge = match (&self.config.oauth, response.as_error()) {
+            (Some(oauth), Some(error)) if error.kind() == ErrorKind::Forbidden => oauth
+                .www_authenticate(&Challenge::InsufficientScope(
+                    error.required_scopes().join(" "),
+                )),
+            _ => None,
+        };
+        let mut http = json(status, response.to_vec(), cors);
+        if let Some(challenge) = challenge {
+            http.headers_mut()
+                .insert(header::WWW_AUTHENTICATE, challenge);
         }
+        http
     }
 }
 
@@ -583,6 +654,7 @@ impl StreamableHttpService {
     fn legacy_session(
         &self,
         headers: &HeaderMap,
+        auth: Option<&AuthContext>,
     ) -> Result<Option<LegacySession>, Box<Response<HttpBody>>> {
         if !self.server.legacy_clients_enabled() {
             return Ok(None);
@@ -594,7 +666,12 @@ impl StreamableHttpService {
             return Ok(None);
         }
         match headers.get(MCP_SESSION_ID).and_then(|v| v.to_str().ok()) {
-            Some(token) => match self.server.open_session(token) {
+            Some(token) => match self
+                .server
+                .open_session(token)
+                // A session opened with one user's token is not another's.
+                .filter(|s| s.principal.as_deref() == auth.map(|a| a.digest.as_str()))
+            {
                 Some(session) => Ok(Some(session)),
                 None => {
                     hints::warn_once(
@@ -621,9 +698,11 @@ impl StreamableHttpService {
         &self,
         request: &jsonrpc::Request,
         cors: Option<&HeaderValue>,
+        auth: Option<&AuthContext>,
     ) -> Response<HttpBody> {
         match self.server.legacy_initialize(request.params.as_deref()) {
-            Ok((result, session)) => {
+            Ok((result, mut session)) => {
+                session.principal = auth.map(|a| a.digest.clone());
                 let body = RpcResponse::Result {
                     id: request.id.clone(),
                     result,
@@ -708,13 +787,7 @@ impl StreamableHttpService {
             let _ = done.send(task.await);
         });
 
-        let reply = |response: Option<RpcResponse>| match response {
-            None => plain(StatusCode::ACCEPTED, cors.as_ref()),
-            Some(response) => {
-                let status = response.as_error().map_or(StatusCode::OK, status_for);
-                json(status, response.to_vec(), cors.as_ref())
-            }
-        };
+        let reply = |response: Option<RpcResponse>| self.reply(response, cors.as_ref());
         let first = tokio::select! {
             biased;
             first = outgoing.recv() => first,
@@ -914,6 +987,12 @@ pub async fn serve(
     }
 
     let path: Arc<str> = Arc::from(path);
+    let metadata = service.config.oauth.as_ref().map(|oauth| {
+        (
+            Arc::<[String]>::from(oauth.metadata_paths()),
+            oauth.metadata_service(),
+        )
+    });
     let grace = service.server.limits().tool_timeout;
     let connections = Arc::new(Semaphore::new(service.config.max_connections));
     // HTTP/1.1 only: its header timeout runs from the moment a connection
@@ -951,15 +1030,22 @@ pub async fn serve(
         };
         let service = service.clone();
         let path = Arc::clone(&path);
+        let metadata = metadata.clone();
         let hyper_service =
             hyper::service::service_fn(move |request: Request<hyper::body::Incoming>| {
                 let mut service = service.clone();
                 let path = Arc::clone(&path);
+                let metadata = metadata.clone();
                 async move {
-                    if request.uri().path() == &*path {
-                        tower_service::Service::call(&mut service, request).await
-                    } else {
-                        Ok(plain(StatusCode::NOT_FOUND, None))
+                    let requested = request.uri().path();
+                    if requested == &*path {
+                        return tower_service::Service::call(&mut service, request).await;
+                    }
+                    match &metadata {
+                        Some((paths, metadata)) if paths.iter().any(|p| p == requested) => {
+                            Ok(metadata.respond(request.method()))
+                        }
+                        _ => Ok(plain(StatusCode::NOT_FOUND, None)),
                     }
                 }
             });
@@ -1167,6 +1253,7 @@ fn status_for(error: &McpError) -> StatusCode {
         ErrorKind::BadRequest => StatusCode::BAD_REQUEST,
         ErrorKind::MethodNotFound => StatusCode::NOT_FOUND,
         ErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+        ErrorKind::Forbidden => StatusCode::FORBIDDEN,
         _ => StatusCode::OK,
     }
 }
@@ -1205,14 +1292,19 @@ fn host_allowed(allowed: &AllowedHosts, parts: &http::request::Parts) -> bool {
     let Some(host) = host else {
         return false;
     };
-    let host = strip_port(host);
+    host_name_allowed(allowed, strip_port(host))
+}
+
+/// Whether a host name (without port) is allowed.
+fn host_name_allowed(allowed: &AllowedHosts, host: &str) -> bool {
     match allowed {
+        AllowedHosts::Any => true,
         AllowedHosts::List(list) => list.iter().any(|h| h.eq_ignore_ascii_case(host)),
-        _ => is_localhost(host),
+        AllowedHosts::Localhost => is_localhost(host),
     }
 }
 
-fn strip_port(authority: &str) -> &str {
+pub(crate) fn strip_port(authority: &str) -> &str {
     if authority.starts_with('[') {
         // `[::1]:8080` → `[::1]`
         return authority
@@ -1223,7 +1315,7 @@ fn strip_port(authority: &str) -> &str {
     authority.split(':').next().unwrap_or(authority)
 }
 
-fn is_localhost(host: &str) -> bool {
+pub(crate) fn is_localhost(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "[::1]"
 }
 
@@ -1276,7 +1368,36 @@ fn with_cors(response: &mut Response<HttpBody>, origin: Option<&HeaderValue>) {
         let headers = response.headers_mut();
         headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.clone());
         headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+        // Browser clients must read OAuth challenges and legacy sessions.
+        headers.insert(
+            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            HeaderValue::from_static("www-authenticate, mcp-session-id"),
+        );
     }
+}
+
+/// A `401`/`403`/`400`/`503` answer to a request that failed authorization.
+fn challenge_response(
+    oauth: &OAuth,
+    challenge: &Challenge,
+    cors: Option<&HeaderValue>,
+) -> Response<HttpBody> {
+    let error = match challenge {
+        Challenge::Unavailable => McpError::internal_with_message(challenge.message()),
+        _ => McpError::invalid_request(challenge.message()),
+    };
+    let mut response = rpc_error(challenge.status(), None, &error, cors);
+    if let Some(value) = oauth.www_authenticate(challenge) {
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, value);
+    }
+    if *challenge == Challenge::Unavailable {
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+    }
+    response
 }
 
 fn plain(status: StatusCode, cors: Option<&HeaderValue>) -> Response<HttpBody> {

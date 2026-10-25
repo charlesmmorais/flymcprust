@@ -77,6 +77,9 @@ struct Payload {
     n: u32,
     /// Answers collected in earlier rounds.
     r: BTreeMap<String, Value>,
+    /// Digest of the authenticated principal (OAuth), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    p: Option<String>,
 }
 
 impl StateCodec {
@@ -127,6 +130,7 @@ impl StateCodec {
             || payload.m != round.method
             || payload.t != round.target
             || payload.a != digest
+            || payload.p.as_deref() != round.principal
             || payload.e < now_secs()
         {
             return Err(invalid());
@@ -147,6 +151,9 @@ pub(crate) struct RoundKey<'a> {
     pub(crate) method: &'static str,
     pub(crate) target: &'a str,
     pub(crate) arguments: Args<'a>,
+    /// Digest of the authenticated principal: a state issued to one user is
+    /// useless to another.
+    pub(crate) principal: Option<&'a str>,
 }
 
 /// The arguments of the original request.
@@ -244,6 +251,7 @@ impl Round {
             t: key.target.to_owned(),
             a: key.args_digest(),
             e: expiry,
+            p: key.principal.map(str::to_owned),
             n: self.number.saturating_add(1),
             r: {
                 let used = self.used.lock().unwrap_or_else(PoisonError::into_inner);
@@ -589,6 +597,7 @@ mod tests {
             method: "tools/call",
             target,
             arguments: Args::Raw(r#"{"a": 1}"#),
+            principal: None,
         }
     }
 
@@ -638,6 +647,10 @@ mod tests {
         let mut other_args = key("t");
         other_args.arguments = Args::Raw(r#"{"a":2}"#);
         assert_eq!(reject(&token, other_args), -32602);
+        // Another user.
+        let mut other_user = key("t");
+        other_user.principal = Some("someone-else");
+        assert_eq!(reject(&token, other_user), -32602);
         let other_key = StateCodec::new(vec![8; 32], Duration::from_secs(600));
         assert!(Round::start(&other_key, &key("t"), None, Some(&token)).is_err());
     }
@@ -663,6 +676,7 @@ mod tests {
                 method: "tools/call",
                 target: "t",
                 arguments: Args::Raw(raw),
+                principal: None,
             }
             .args_digest()
         };

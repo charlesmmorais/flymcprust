@@ -15,6 +15,7 @@ use serde_json::{Map, Value};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use crate::auth::AuthContext;
 use crate::completion::{Completer, CompletionRequest};
 use crate::context::{Ctx, RequestMeta, TransportContext, TypeMap};
 use crate::error::McpError;
@@ -103,6 +104,14 @@ pub enum BuildError {
     /// No random `requestState` key could be generated.
     #[error("could not generate a random requestState key: {0}")]
     RandomUnavailable(String),
+    /// A handler declares a malformed OAuth scope.
+    #[error("`{handler}` declares an invalid scope `{scope}`")]
+    InvalidScope {
+        /// The tool or prompt name, or the resource URI.
+        handler: String,
+        /// The scope.
+        scope: String,
+    },
     /// A pre-serialized response could not be built.
     #[error("could not serialize {0}")]
     Serialize(&'static str, #[source] serde_json::Error),
@@ -157,6 +166,9 @@ impl BuildError {
             ),
             Self::RandomUnavailable(_) => "the operating system did not provide randomness; set \
                  a key explicitly with `.request_state_key(..)`"
+                .to_owned(),
+            Self::InvalidScope { .. } => "scopes are non-empty and use visible ASCII except `\"` \
+                 and `\\`, without spaces (for example `files:read`)"
                 .to_owned(),
             Self::Serialize(..) => "a definition built by hand contains a value JSON cannot \
                  represent (such as a NaN number); if it came from a macro, please report a bug"
@@ -454,6 +466,7 @@ impl ServerBuilder {
                 return Err(BuildError::InvalidToolName(def.tool.name.clone()));
             }
             check_state(&self.state, &def.required_state, &def.tool.name)?;
+            check_scopes(&def.scopes, &def.tool.name)?;
             let params = mirror::collect(&def.tool.input_schema.extra).map_err(|reason| {
                 BuildError::InvalidHeaderAnnotation {
                     tool: def.tool.name.clone(),
@@ -599,12 +612,18 @@ impl ServerBuilder {
                 name: t.tool.name,
                 call: t.call,
                 mirrored,
+                scopes: t.scopes.into(),
             })
-            .collect();
+            .collect::<Box<[RegisteredTool]>>();
+        let has_scopes = registry.iter().any(|t| !t.scopes.is_empty())
+            || resources.statics.iter().any(|r| !r.scopes.is_empty())
+            || resources.templates.iter().any(|t| !t.scopes.is_empty())
+            || prompts.registry.iter().any(|p| !p.scopes.is_empty());
 
         Ok(Server {
             inner: Arc::new(Inner {
                 tools: registry,
+                has_scopes,
                 resources: resources.statics,
                 templates: resources.templates,
                 prompts: prompts.registry,
@@ -647,6 +666,8 @@ struct Inner {
     /// Sorted by name.
     prompts: Box<[RegisteredPrompt]>,
     has_completions: bool,
+    /// Whether any handler declares OAuth scopes.
+    has_scopes: bool,
     state_codec: StateCodec,
     legacy: LegacyConfig,
     legacy_hint: Once,
@@ -667,6 +688,7 @@ struct RegisteredTool {
     name: String,
     call: CallFn,
     mirrored: Vec<MirroredParam>,
+    scopes: Box<[String]>,
 }
 
 struct RegisteredResource {
@@ -674,6 +696,7 @@ struct RegisteredResource {
     read: ReadFn,
     ttl_ms: u64,
     cache_scope: CacheScope,
+    scopes: Box<[String]>,
 }
 
 struct RegisteredTemplate {
@@ -682,6 +705,7 @@ struct RegisteredTemplate {
     ttl_ms: u64,
     cache_scope: CacheScope,
     completers: Vec<Completer>,
+    scopes: Box<[String]>,
 }
 
 struct RegisteredPrompt {
@@ -689,6 +713,7 @@ struct RegisteredPrompt {
     description: Option<String>,
     get: GetFn,
     completers: Vec<Completer>,
+    scopes: Box<[String]>,
 }
 
 struct BuiltResources {
@@ -712,6 +737,16 @@ fn check_state(
         Some(missing) => Err(BuildError::MissingState {
             handler: handler.to_owned(),
             type_name: missing.type_name,
+        }),
+        None => Ok(()),
+    }
+}
+
+fn check_scopes(scopes: &[String], handler: &str) -> Result<(), BuildError> {
+    match scopes.iter().find(|s| !crate::auth::is_valid_scope(s)) {
+        Some(scope) => Err(BuildError::InvalidScope {
+            handler: handler.to_owned(),
+            scope: scope.clone(),
         }),
         None => Ok(()),
     }
@@ -741,6 +776,7 @@ fn build_resources(defs: Vec<ResourceDef>, state: &TypeMap) -> Result<BuiltResou
     let mut listed_templates = Vec::new();
     for def in defs {
         check_state(state, &def.required_state, def.uri())?;
+        check_scopes(&def.scopes, def.uri())?;
         let ttl_ms = millis(def.ttl);
         match def.kind {
             ResourceKind::Static(resource) => {
@@ -756,6 +792,7 @@ fn build_resources(defs: Vec<ResourceDef>, state: &TypeMap) -> Result<BuiltResou
                     read: def.read,
                     ttl_ms,
                     cache_scope: def.cache_scope,
+                    scopes: def.scopes.into(),
                 });
                 listed.push(resource);
             }
@@ -776,6 +813,7 @@ fn build_resources(defs: Vec<ResourceDef>, state: &TypeMap) -> Result<BuiltResou
                         ttl_ms,
                         cache_scope: def.cache_scope,
                         completers: def.completers,
+                        scopes: def.scopes.into(),
                     },
                 ));
                 listed_templates.push(template);
@@ -836,6 +874,7 @@ fn build_prompts(mut defs: Vec<PromptDef>, state: &TypeMap) -> Result<BuiltPromp
             return Err(BuildError::InvalidPromptName(name.clone()));
         }
         check_state(state, &def.required_state, name)?;
+        check_scopes(&def.scopes, name)?;
         let arguments: Vec<&str> = def
             .prompt
             .arguments
@@ -849,6 +888,7 @@ fn build_prompts(mut defs: Vec<PromptDef>, state: &TypeMap) -> Result<BuiltPromp
             description: def.prompt.description.clone(),
             get: def.get,
             completers: def.completers,
+            scopes: def.scopes.into(),
         });
         listed.push(def.prompt);
     }
@@ -936,6 +976,12 @@ impl Server {
             .binary_search_by(|t| t.name.as_str().cmp(name))
             .ok()
             .and_then(|i| self.inner.tools.get(i))
+    }
+
+    /// Whether any handler declares OAuth scopes.
+    #[cfg_attr(not(feature = "http"), allow(dead_code))]
+    pub(crate) fn has_scopes(&self) -> bool {
+        self.inner.has_scopes
     }
 
     pub(crate) fn legacy(&self) -> &LegacyConfig {
@@ -1033,10 +1079,12 @@ impl Server {
             methods::TOOLS_CALL => {
                 let p: CallParams<'_> = parse_params(params)?;
                 let meta = self.validate_meta(p.meta, &transport)?;
+                let auth = transport.get::<AuthContext>();
                 let key = RoundKey {
                     method: methods::TOOLS_CALL,
                     target: &p.name,
                     arguments: p.arguments.map_or(Args::None, |a| Args::Raw(a.get())),
+                    principal: auth.as_deref().map(|a| a.digest.as_str()),
                 };
                 let round = self.round(&key, p.input_responses, p.request_state.as_deref())?;
                 let ctx = self.ctx(req.id, meta, &cancellation, transport, &round);
@@ -1059,10 +1107,12 @@ impl Server {
             methods::RESOURCES_READ if self.inner.resources_list.is_some() => {
                 let p: ReadParams<'_> = parse_params(params)?;
                 let meta = self.validate_meta(p.meta, &transport)?;
+                let auth = transport.get::<AuthContext>();
                 let key = RoundKey {
                     method: methods::RESOURCES_READ,
                     target: &p.uri,
                     arguments: Args::None,
+                    principal: auth.as_deref().map(|a| a.digest.as_str()),
                 };
                 let round = self.round(&key, p.input_responses, p.request_state.as_deref())?;
                 let ctx = self.ctx(req.id, meta, &cancellation, transport, &round);
@@ -1080,10 +1130,12 @@ impl Server {
                 let p: GetPromptParams<'_> = parse_params(params)?;
                 let meta = self.validate_meta(p.meta, &transport)?;
                 let arguments = PromptArguments::new(p.arguments.unwrap_or_default());
+                let auth = transport.get::<AuthContext>();
                 let key = RoundKey {
                     method: methods::PROMPTS_GET,
                     target: &p.name,
                     arguments: Args::Map(arguments.as_map()),
+                    principal: auth.as_deref().map(|a| a.digest.as_str()),
                 };
                 let round = self.round(&key, p.input_responses, p.request_state.as_deref())?;
                 let ctx = self.ctx(req.id, meta, &cancellation, transport, &round);
@@ -1304,6 +1356,7 @@ impl Server {
         let tool = self
             .find_tool(name)
             .ok_or_else(|| McpError::unknown_tool(name))?;
+        authorize(&tool.scopes, &ctx)?;
 
         let notifier = ctx.notifier_handle();
         let outcome = match (tool.call)(arguments, ctx) {
@@ -1335,7 +1388,7 @@ impl Server {
 
     /// Finds the handler for a URI: an exact static resource first, then the
     /// first matching template.
-    fn find_resource(&self, uri: &str) -> Option<(ReadFn, UriVars, u64, CacheScope)> {
+    fn find_resource(&self, uri: &str) -> Option<(ReadFn, UriVars, u64, CacheScope, &[String])> {
         if let Some(r) = self
             .inner
             .resources
@@ -1343,12 +1396,18 @@ impl Server {
             .ok()
             .and_then(|i| self.inner.resources.get(i))
         {
-            return Some((r.read, UriVars::default(), r.ttl_ms, r.cache_scope));
+            return Some((
+                r.read,
+                UriVars::default(),
+                r.ttl_ms,
+                r.cache_scope,
+                &r.scopes,
+            ));
         }
         self.inner.templates.iter().find_map(|t| {
             t.template
                 .matches(uri)
-                .map(|vars| (t.read, vars, t.ttl_ms, t.cache_scope))
+                .map(|vars| (t.read, vars, t.ttl_ms, t.cache_scope, &*t.scopes))
         })
     }
 
@@ -1358,9 +1417,10 @@ impl Server {
         ctx: Ctx,
         cancellation: &CancellationToken,
     ) -> Result<Option<Box<RawValue>>, HandlerError> {
-        let (read, vars, ttl_ms, cache_scope) = self
+        let (read, vars, ttl_ms, cache_scope, scopes) = self
             .find_resource(uri)
             .ok_or_else(|| McpError::resource_not_found(uri))?;
+        authorize(scopes, &ctx)?;
         let notifier = ctx.notifier_handle();
         let outcome = match read(uri, &vars, ctx) {
             Err(error) => Err(error),
@@ -1400,6 +1460,7 @@ impl Server {
         let prompt = self
             .find_prompt(name)
             .ok_or_else(|| McpError::unknown_prompt(name))?;
+        authorize(&prompt.scopes, &ctx)?;
         let notifier = ctx.notifier_handle();
         let outcome = match (prompt.get)(arguments, ctx) {
             Err(error) => Err(error),
@@ -1622,4 +1683,17 @@ fn is_valid_tool_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+}
+
+/// Checks a handler's scopes against the request's access token. Without
+/// OAuth (stdio, or HTTP without [`OAuth`](crate::transport::http::OAuth))
+/// there is no token and nothing to check.
+fn authorize(scopes: &[String], ctx: &Ctx) -> Result<(), McpError> {
+    if scopes.is_empty() {
+        return Ok(());
+    }
+    match ctx.transport().get::<AuthContext>() {
+        Some(auth) => auth.check(scopes),
+        None => Ok(()),
+    }
 }

@@ -63,9 +63,11 @@ as today.
 
 ### 6. Authentication (OAuth 2.1 resource server)
 
-Bearer-token validation as a tower layer, protected resource metadata, and
-`requestState` bound to the authenticated principal (the remaining
-known limitation of the security model).
+- Done: `OAuth` on the HTTP transport (bearer tokens, `401`/`403` challenges,
+  Protected Resource Metadata), the `TokenVerifier` trait, `ctx.principal()`,
+  per-handler `scopes = [..]` with hierarchies, and `requestState` and legacy
+  sessions bound to the authenticated principal.
+- Next: a built-in JWT verifier (`oauth` feature) with JWKS discovery.
 
 ### 7. First release
 

@@ -77,6 +77,10 @@ pub struct LegacySession {
     #[allow(deprecated)]
     #[serde(rename = "l", default, skip_serializing_if = "Option::is_none")]
     pub(crate) log_level: Option<spec::LoggingLevel>,
+    /// Digest of the authenticated principal (HTTP with OAuth): the session
+    /// is only valid with a token of the same user.
+    #[serde(rename = "p", default, skip_serializing_if = "Option::is_none")]
+    pub(crate) principal: Option<String>,
 }
 
 impl LegacySession {
@@ -322,6 +326,7 @@ impl Server {
             expires: now_secs().saturating_add(config.session_ttl.as_secs()),
             nonce: nonce.iter().map(|b| format!("{b:02x}")).collect(),
             log_level: None,
+            principal: None,
         };
         Ok((to_raw(&Value::Object(result))?, session))
     }

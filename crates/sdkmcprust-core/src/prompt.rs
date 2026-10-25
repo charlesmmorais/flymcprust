@@ -37,6 +37,7 @@ pub struct PromptDef {
     pub(crate) get: GetFn,
     pub(crate) required_state: Vec<StateRequirement>,
     pub(crate) completers: Vec<Completer>,
+    pub(crate) scopes: Vec<String>,
 }
 
 impl PromptDef {
@@ -48,7 +49,27 @@ impl PromptDef {
             get,
             required_state: Vec::new(),
             completers: Vec::new(),
+            scopes: Vec::new(),
         }
+    }
+
+    /// Declares the OAuth scopes a caller needs (all of them). Enforced when
+    /// the HTTP transport requires OAuth; the client gets `403` with an
+    /// `insufficient_scope` challenge listing these scopes.
+    #[must_use]
+    pub fn scopes<I, S>(mut self, scopes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.scopes = scopes.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The OAuth scopes declared with [`scopes`](Self::scopes).
+    #[must_use]
+    pub fn required_scopes(&self) -> &[String] {
+        &self.scopes
     }
 
     /// Declares that the prompt needs shared state of type `T`.

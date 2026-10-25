@@ -51,6 +51,7 @@ pub struct ResourceDef {
     pub(crate) ttl: Duration,
     pub(crate) cache_scope: CacheScope,
     pub(crate) completers: Vec<Completer>,
+    pub(crate) scopes: Vec<String>,
 }
 
 impl ResourceDef {
@@ -62,7 +63,27 @@ impl ResourceDef {
             ttl: Duration::ZERO,
             cache_scope: CacheScope::Private,
             completers: Vec::new(),
+            scopes: Vec::new(),
         }
+    }
+
+    /// Declares the OAuth scopes a caller needs (all of them). Enforced when
+    /// the HTTP transport requires OAuth; the client gets `403` with an
+    /// `insufficient_scope` challenge listing these scopes.
+    #[must_use]
+    pub fn scopes<I, S>(mut self, scopes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.scopes = scopes.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The OAuth scopes declared with [`scopes`](Self::scopes).
+    #[must_use]
+    pub fn required_scopes(&self) -> &[String] {
+        &self.scopes
     }
 
     /// A resource with a fixed URI (listed by `resources/list`).

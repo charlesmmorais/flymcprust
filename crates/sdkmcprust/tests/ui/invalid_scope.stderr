@@ -1,0 +1,11 @@
+error: invalid OAuth scope: use visible ASCII except `"` and `\`, without spaces
+ --> tests/ui/invalid_scope.rs:3:18
+  |
+3 | #[tool(scopes = ["files write"])]
+  |                  ^^^^^^^^^^^^^
+
+error: `scopes` expects an array of strings, e.g. `scopes = ["files:read"]`
+ --> tests/ui/invalid_scope.rs:6:17
+  |
+6 | #[tool(scopes = "files")]
+  |                 ^^^^^^^

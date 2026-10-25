@@ -24,6 +24,7 @@ struct ToolArgs {
     destructive: Option<LitBool>,
     idempotent: Option<LitBool>,
     open_world: Option<LitBool>,
+    scopes: Option<Vec<LitStr>>,
 }
 
 fn parse_args(attr: TokenStream) -> syn::Result<ToolArgs> {
@@ -61,10 +62,13 @@ fn parse_args(attr: TokenStream) -> syn::Result<ToolArgs> {
             set_flag(&mut args.idempotent, &meta)
         } else if meta.path.is_ident("open_world") {
             set_flag(&mut args.open_world, &meta)
+        } else if let Some(key) = meta.path.get_ident().filter(|i| *i == "scopes") {
+            let value: syn::Expr = meta.value()?.parse()?;
+            params::set_once(&mut args.scopes, key, params::scopes(key, &value)?)
         } else {
             Err(meta.error(
                 "unknown `tool` argument; expected `name`, `title`, `description`, \
-                 `read_only`, `destructive`, `idempotent` or `open_world`",
+                 `read_only`, `destructive`, `idempotent`, `open_world` or `scopes`",
             ))
         }
     });
@@ -89,6 +93,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
 
     let params = params::collect_params(&mut func, &OPTIONS)?;
     let krate = params::krate();
+    let scopes = params::scopes_call(args.scopes.as_ref());
     let fn_ident = &func.sig.ident;
     let vis = &func.vis;
 
@@ -224,6 +229,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                     .map(#krate::output_schema_from);
                 #krate::ToolDef::new(tool, __call)
                     #(.require_state::<#state_types>())*
+                    #scopes
             }
         }
 

@@ -436,6 +436,42 @@ pub(crate) fn lit_str(key: &Ident, value: &Expr) -> syn::Result<LitStr> {
     }
 }
 
+/// `scopes = ["a", "b"]`: OAuth scopes a handler needs, checked here so a
+/// malformed scope is a compile error.
+pub(crate) fn scopes(key: &Ident, value: &Expr) -> syn::Result<Vec<LitStr>> {
+    let Expr::Array(ExprArray { elems, .. }) = value else {
+        return Err(Error::new_spanned(
+            value,
+            format!("`{key}` expects an array of strings, e.g. `{key} = [\"files:read\"]`"),
+        ));
+    };
+    let mut scopes = Vec::with_capacity(elems.len());
+    for elem in elems {
+        let lit = lit_str(key, elem)?;
+        let scope = lit.value();
+        let valid = !scope.is_empty()
+            && scope
+                .bytes()
+                .all(|b| matches!(b, 0x21 | 0x23..=0x5B | 0x5D..=0x7E));
+        if !valid {
+            return Err(Error::new(
+                lit.span(),
+                "invalid OAuth scope: use visible ASCII except `\"` and `\\`, without spaces",
+            ));
+        }
+        scopes.push(lit);
+    }
+    Ok(scopes)
+}
+
+/// The `.scopes([..])` call for declared scopes (nothing when none).
+pub(crate) fn scopes_call(scopes: Option<&Vec<LitStr>>) -> TokenStream {
+    match scopes {
+        Some(scopes) if !scopes.is_empty() => quote! { .scopes([#(#scopes),*]) },
+        _ => TokenStream::new(),
+    }
+}
+
 /// Stores `value` in `slot`, rejecting duplicates.
 pub(crate) fn set_once<T>(slot: &mut Option<T>, key: &Ident, value: T) -> syn::Result<()> {
     if slot.is_some() {
