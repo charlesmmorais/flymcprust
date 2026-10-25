@@ -286,6 +286,13 @@ Idle memory: 5.9 MiB (rmcp 6.3 MiB, Python 78 MiB). Binary: 1.9 MiB (rmcp
 3.4 MiB). Large payloads are on par with rmcp: the time goes into JSON
 parsing and serialization, which both SDKs share through `serde_json`.
 
+On Linux (GitHub Actions runner, Intel Xeon, 4 cores, same suite), the gap
+is wider: 2.4–2.6× the throughput of rmcp with 3.2–4.1× less CPU per request
+on small messages, and 48–64× the throughput of the Python SDK. Idle memory:
+4.2 MiB (rmcp 5.1 MiB, Python 73 MiB). Full tables:
+[bench/results/linux-ci/RESULTS.md](bench/results/linux-ci/RESULTS.md).
+Shared runners vary from run to run; compare servers within one run.
+
 Reproduce with `cargo run --release --manifest-path bench/Cargo.toml -p
 mcp-load -- suite` (see [bench/README.md](bench/README.md)).
 

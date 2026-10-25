@@ -38,8 +38,8 @@ indicative only; the numbers that matter come from a quiet, dedicated machine.
 
 First results (laptop, 64 clients): 1.6–1.9× the throughput of `rmcp` with
 2.3–2.6× less CPU per request on small messages, parity on 64 KiB payloads,
-and 22–39× the throughput of the Python SDK. Next steps: rerun on a quiet
-Linux machine, add the stdio transport, and look for the remaining cost on
+and 22–39× the throughput of the Python SDK. On a Linux CI runner: 2.4–2.6×
+rmcp's throughput with 3.2–4.1× less CPU on small messages. Next steps: add the stdio transport, and look for the remaining cost on
 large payloads (several `serde_json` passes over the same message).
 
 ### 4. Compatibility with 2025-11-25 clients

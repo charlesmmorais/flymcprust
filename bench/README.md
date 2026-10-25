@@ -14,8 +14,9 @@ responses (no SSE), stateless, bound to `127.0.0.1`. The Rust servers use the
 same release profile (`lto = "thin"`, `codegen-units = 1`) and hyper's
 HTTP/1.1 server.
 
-Results: [results/RESULTS.md](results/RESULTS.md) (raw data in
-[results/results.json](results/results.json)).
+Results: [results/RESULTS.md](results/RESULTS.md) (Windows laptop) and
+[results/linux-ci/RESULTS.md](results/linux-ci/RESULTS.md) (Linux GitHub
+Actions runner), with raw data next to each.
 
 ## Run it
 
