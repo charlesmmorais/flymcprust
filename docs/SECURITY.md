@@ -37,7 +37,7 @@ handler code, and side channels of the host.
 | Forged legacy sessions or answers (2025-11-25 clients) | `MCP-Session-Id` tokens are HMAC-signed (separate signing context from `requestState`), expire after 24 h and carry a random nonce, so they are unique and cannot be forged or altered; invalid ones get `404`. Server-to-client requests use random 128-bit ids bound to the session that caused them, so another client cannot answer them. |
 | Forged or replayed `requestState` (MRTR) | HMAC-SHA256 with a 256-bit random key (or a configured one of at least 32 bytes), verified in constant time before parsing; bound to method, target, argument digest and expiry (10 min); only answers the handler actually read are carried forward. |
 | Flooding a slow client with notifications | Notifications never block handlers: log messages beyond a 32-message buffer are dropped and progress keeps only the latest value; nothing is sent after the response. |
-| Unauthenticated remote access (with `HttpConfig::oauth`) | Every request needs a bearer token checked by the application's `TokenVerifier` before the body is read; `401` with a challenge otherwise. Tokens are length-limited (16 KiB) and character-checked before verification; several `Authorization` headers get `400`; verification is bounded (10 s). Rejection reasons are logged, never sent. Handler scopes are checked before the handler runs (`403`). |
+| Unauthenticated remote access (with `HttpConfig::oauth`) | Every request needs a bearer token checked by the application's `TokenVerifier` before the body is read; `401` with a challenge otherwise. Tokens are length-limited (16 KiB) and character-checked before verification; several `Authorization` headers get `400`; verification is bounded (10 s). Rejection reasons are logged, never sent. Handler scopes are checked before the handler runs (`403`). The `Authorization` header is removed before handlers run, so they cannot pass the token through. |
 | Forged or misused JWT access tokens (`auth::JwtVerifier`) | Only asymmetric algorithms exist in the verifier (no `none`, no HMAC), from a configurable allowlist; the key must fit the algorithm (`kty`, curve, `alg`, `use`); RSA keys of at least 2048 bits; `crit` and encrypted tokens refused; keys only from the configured issuer, never from token headers. Issuer, audience (this server, as the spec requires), `exp` and `nbf` checked with a 60 s leeway. Key discovery checks that the metadata names the issuer; documents limited to 512 KiB and 5 s, no redirects, HTTPS except on localhost; unknown key ids refetch keys at most every 30 s. Fuzzed (`verify_jwt`). |
 | A user replaying another user's `requestState` or legacy session | Both tokens carry a digest of the authenticated issuer and subject and are rejected with another principal's token. |
 | Requests for input the client cannot serve | Client capabilities checked before any input request (`-32021`). |
@@ -92,6 +92,38 @@ The SDK cannot enforce these; applications must:
   and DNS-rebinding scenarios.
 
 ## 6. Review log
+
+### 2026-10-25: review of phases 4 to 6
+
+Reviewed: legacy sessions and server-to-client requests (HTTP and stdio),
+SSE response streaming and notifications, the OAuth resource server, the
+JWT verifier and key fetching, and the binding of `requestState` and
+sessions to the principal. Findings 1 to 3 were reproduced by a failing test
+before the fix (`crates/sdkmcprust-core/tests/hardening.rs`).
+
+| # | Severity | Finding | Fix |
+| --- | --- | --- | --- |
+| 1 | Medium | A legacy request whose client disconnected kept its handler running (2025-11-25 does not treat disconnection as cancellation), but released its in-flight permit, and the waiting handler kept the parsed message. Posting large requests and disconnecting created unbounded background work and memory, past `max_in_flight`. | The permit is shared by the handler task and the response stream, and released when both are done. |
+| 2 | Medium | With OAuth, handlers could read the bearer token from the request headers in `TransportContext`, inviting the token passthrough the specification forbids. | The `Authorization` header is removed once the token is verified; handlers get `ctx.principal()`. |
+| 3 | Low | What a legacy client declares at `initialize` (capabilities, client info) is carried in its session token, with no limit: a 4 MiB declaration became a 4 MiB header that the server re-verifies on every request. | Declarations are limited to 8 KiB (`-32602` beyond). |
+| 4 | Low | Sending a server-to-client request to a legacy client had no deadline (only waiting for the answer had one): a client that stopped reading its SSE stream blocked the handler once the 32-message buffer was full. | The send is bounded by the tool timeout too. |
+| 5 | Low | When cached JWT keys expired (hourly), every request waited for the refresh; a slow authorization server turned that into `503`s. | A routine refresh runs once while other requests keep using the current keys; only tokens naming an unknown key wait. |
+| 6 | Hardening | Discovery accepted an `http://localhost` JWKS URL from an `https` issuer's metadata. | An `https` issuer's keys are fetched over `https` only. |
+
+Checked without findings: session and `requestState` tokens are HMAC-signed
+with separate contexts, compared in constant time, bound to the principal
+and expiring; pending server-to-client requests use random 128-bit ids
+bound to their session; SSE events carry serialized JSON, which never
+contains raw newlines (no event injection); notifications never block
+handlers and stop at the response; tokens are length- and charset-checked
+before verification and rejection reasons are never sent; the JWT verifier
+has no `none` or HMAC path, binds keys to algorithms, ignores key URLs in
+tokens and checks issuer, audience and expiry; discovered metadata must name
+the configured issuer.
+
+Accepted: a token without `kid` is checked against every fitting key (at
+most 64); legacy logs default to every level until `logging/setLevel`, as in
+2025-11-25.
 
 ### 2026-10-25: full review of the SDK
 

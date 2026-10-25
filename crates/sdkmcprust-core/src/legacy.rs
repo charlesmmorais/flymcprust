@@ -50,6 +50,10 @@ const SESSION_CONTEXT: &[u8] = b"sdkmcprust/legacy-session/v1\0";
 /// Upper bound on input round trips for one legacy request.
 const MAX_INPUT_ROUNDS: usize = 16;
 
+/// Largest serialized `capabilities` plus `clientInfo` kept from
+/// `initialize`; on HTTP they travel in every request's session header.
+const MAX_DECLARATION_BYTES: usize = 8 * 1024;
+
 /// The 2025-11-25 code for "resource not found".
 const LEGACY_RESOURCE_NOT_FOUND: i64 = -32002;
 
@@ -206,11 +210,15 @@ impl Peer for ChannelPeer {
                 "jsonrpc": "2.0", "id": id, "method": method, "params": params,
             });
             let bytes = serde_json::to_vec(&message).map_err(|_| McpError::internal())?;
-            if self.out.send(bytes).await.is_err() {
-                self.pending.forget(&id);
-                return Err(McpError::internal_with_message(
-                    "The connection to the client is closed.",
-                ));
+            // A client that stops reading must not hold the handler forever.
+            match tokio::time::timeout(self.timeout, self.out.send(bytes)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) | Err(_) => {
+                    self.pending.forget(&id);
+                    return Err(McpError::internal_with_message(
+                        "The connection to the client is closed or not reading.",
+                    ));
+                }
             }
             match tokio::time::timeout(self.timeout, receiver).await {
                 Ok(Ok(Ok(result))) => Ok(result),
@@ -220,8 +228,8 @@ impl Peer for ChannelPeer {
                 Ok(Err(_)) | Err(_) => {
                     self.pending.forget(&id);
                     tracing::warn!(
-                        "a client did not answer a `{method}` request in time
-  = help: the                          wait is bounded by ServerBuilder::tool_timeout(..)"
+                        "a client did not answer a `{method}` request in time\n  = help: the \
+                         wait is bounded by ServerBuilder::tool_timeout(..)"
                     );
                     Err(McpError::internal_with_message(
                         "The client did not answer in time.",
@@ -300,6 +308,20 @@ impl Server {
                     crate::error::sanitize(&e.to_string())
                 ))
             })?;
+        let declared = serde_json::to_vec(&params.capabilities)
+            .map_or(usize::MAX, |c| c.len())
+            .saturating_add(
+                params
+                    .client_info
+                    .as_ref()
+                    .and_then(|i| serde_json::to_vec(i).ok())
+                    .map_or(0, |i| i.len()),
+            );
+        if declared > MAX_DECLARATION_BYTES {
+            return Err(McpError::invalid_params(
+                "Client capabilities and info are too large",
+            ));
+        }
         let version = if is_legacy_version(&params.protocol_version) {
             params.protocol_version
         } else {
@@ -488,6 +510,23 @@ mod tests {
         assert!(is_legacy_version("2025-06-18"));
         assert!(!is_legacy_version("2025-03-26"));
         assert!(!is_legacy_version("2026-07-28"));
+    }
+
+    #[tokio::test]
+    async fn a_client_that_stops_reading_does_not_block_the_handler() {
+        let (out, _unread) = mpsc::channel(1);
+        out.send(b"queued".to_vec()).await.unwrap();
+        let peer = ChannelPeer {
+            pending: Arc::default(),
+            owner: 0,
+            out,
+            timeout: Duration::from_millis(50),
+        };
+        let started = std::time::Instant::now();
+        let params = Value::Object(Map::new());
+        assert!(peer.request("elicitation/create", &params).await.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(peer.pending.lock().is_empty());
     }
 
     #[test]

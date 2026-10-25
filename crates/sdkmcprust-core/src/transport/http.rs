@@ -313,7 +313,7 @@ impl StreamableHttpService {
         B: Body,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        let (parts, body) = request.into_parts();
+        let (mut parts, body) = request.into_parts();
 
         let cors = match parts.headers.get(header::ORIGIN) {
             None => None,
@@ -431,7 +431,12 @@ impl StreamableHttpService {
         let auth = match &self.config.oauth {
             None => None,
             Some(oauth) => match oauth.authenticate(&parts.headers).await {
-                Ok(auth) => Some(auth),
+                Ok(auth) => {
+                    // Handlers see the principal, never the token: they
+                    // cannot pass it through to other services by mistake.
+                    parts.headers.remove(header::AUTHORIZATION);
+                    Some(auth)
+                }
                 Err(challenge) => return challenge_response(oauth, &challenge, cors.as_ref()),
             },
         };
@@ -783,8 +788,14 @@ impl StreamableHttpService {
         let (out, mut outgoing) = mpsc::channel::<Vec<u8>>(STREAM_BUFFER);
         let (done, mut finished) = oneshot::channel::<Option<RpcResponse>>();
         let task = run(out);
+        // The request counts against the in-flight limit until both the
+        // handler and the response stream are done: a legacy handler keeps
+        // running after its client disconnects.
+        let permit = Arc::new(permit);
+        let task_permit = Arc::clone(&permit);
         tokio::spawn(async move {
             let _ = done.send(task.await);
+            drop(task_permit);
         });
 
         let reply = |response: Option<RpcResponse>| self.reply(response, cors.as_ref());
@@ -875,7 +886,7 @@ struct SseState {
     /// The handler's response; `None` once received.
     finished: Option<oneshot::Receiver<Option<RpcResponse>>>,
     /// Counts against the in-flight limit until the stream ends.
-    _permit: OwnedSemaphorePermit,
+    _permit: Arc<OwnedSemaphorePermit>,
     /// Cancels the request if the stream is dropped (client disconnect).
     _cancel: Option<DropGuard>,
 }

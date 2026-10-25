@@ -496,8 +496,14 @@ impl JwtVerifier {
             return keys;
         }
 
-        // One fetch at a time; the others wait and reuse its result.
-        let mut state = inner.refresh.lock().await;
+        // One fetch at a time. A routine refresh does not wait for one in
+        // progress (the current keys still work); a token naming an unknown
+        // key waits for its result.
+        let mut state = match inner.refresh.try_lock() {
+            Ok(state) => state,
+            Err(_) if !force && !keys.is_empty() => return keys,
+            Err(_) => inner.refresh.lock().await,
+        };
         let (keys, fetched) = current();
         let fresh_enough = fetched.is_some_and(|at| at.elapsed() < MAX_KEY_AGE);
         if (fresh_enough && !force)
@@ -608,6 +614,9 @@ async fn discover_jwks_uri(fetcher: &Fetcher, issuer: &str) -> Result<String, St
             .and_then(Value::as_str)
             .ok_or_else(|| format!("{url} has no `jwks_uri`"))?;
         canonical_url(uri).map_err(|reason| format!("invalid `jwks_uri` {uri}: {reason}"))?;
+        if issuer.starts_with("https://") && !uri.starts_with("https://") {
+            return Err(format!("{url} names a `jwks_uri` without https"));
+        }
         return Ok(uri.to_owned());
     }
     Err(last_error)
