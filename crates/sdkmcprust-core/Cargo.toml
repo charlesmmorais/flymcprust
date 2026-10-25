@@ -22,8 +22,13 @@ tokio-util.workspace = true
 tower-service.workspace = true
 tracing.workspace = true
 
+[features]
+default = []
+## Newline-delimited JSON-RPC over stdin/stdout (or any byte stream).
+stdio = ["tokio/io-std", "tokio/io-util", "tokio/rt"]
+
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util", "io-util"] }
 
 [lints]
 workspace = true

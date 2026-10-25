@@ -17,7 +17,10 @@ sdkmcprust-macros = { workspace = true, optional = true }
 
 [features]
 default = ["macros"]
+## The `#[tool]` attribute macro.
 macros = ["dep:sdkmcprust-macros"]
+## stdio transport.
+stdio = ["sdkmcprust-core/stdio"]
 
 [lints]
 workspace = true

@@ -392,11 +392,17 @@ fn emit_scalar(s: &ScalarUnion) -> TokenStream {
         expecting.push("a number");
     }
     let expecting = expecting.join(" or ");
+    // Floats rule out `Eq`/`Hash`; ids and tokens need them as map keys.
+    let eq_hash = if has(Scalar::Number) {
+        TokenStream::new()
+    } else {
+        quote!(Eq, Hash,)
+    };
 
     quote! {
         #doc
         #deprecated
-        #[derive(Debug, Clone, PartialEq, Serialize)]
+        #[derive(Debug, Clone, PartialEq, #eq_hash Serialize)]
         #[serde(untagged)]
         pub enum #name {
             #(#variants)*

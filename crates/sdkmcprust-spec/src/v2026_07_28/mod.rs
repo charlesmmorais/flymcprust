@@ -1606,7 +1606,7 @@ impl From<ElicitResultContentValueScalar> for ElicitResultContentValue {
         Self::Scalar(v)
     }
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(untagged)]
 pub enum ElicitResultContentValueScalar {
     /// A string value.
@@ -3851,7 +3851,7 @@ impl ProgressNotificationParams {
     }
 }
 /// A progress token, used to associate progress notifications with the original request.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(untagged)]
 pub enum ProgressToken {
     /// A string value.
@@ -4328,7 +4328,7 @@ impl Request {
     }
 }
 /// A uniquely identifying ID for a request in JSON-RPC.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(untagged)]
 pub enum RequestId {
     /// A string value.

@@ -14,6 +14,7 @@ pub mod jsonrpc;
 mod limits;
 mod server;
 mod tool;
+pub mod transport;
 
 /// Protocol types of the targeted revision.
 pub use sdkmcprust_spec::v2026_07_28 as spec;
