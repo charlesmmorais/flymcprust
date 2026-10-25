@@ -59,6 +59,8 @@ pub struct ToolDef {
     pub(crate) call: CallFn,
     pub(crate) required_state: Vec<StateRequirement>,
     pub(crate) scopes: Vec<String>,
+    pub(crate) ui: Option<String>,
+    pub(crate) visibility: Option<Vec<crate::apps::Visibility>>,
 }
 
 impl ToolDef {
@@ -70,7 +72,36 @@ impl ToolDef {
             call,
             required_state: Vec::new(),
             scopes: Vec::new(),
+            ui: None,
+            visibility: None,
         }
+    }
+
+    /// Renders the tool's results with an MCP Apps interface: the `ui://`
+    /// URI of a resource registered with
+    /// [`ResourceDef::app`](crate::ResourceDef::app). The tool must still
+    /// return text `content` for hosts without MCP Apps.
+    #[must_use]
+    pub fn ui(mut self, resource_uri: impl Into<String>) -> Self {
+        self.ui = Some(resource_uri.into());
+        self
+    }
+
+    /// Who may call the tool (MCP Apps): `[Visibility::App]` hides it from
+    /// the model and leaves it to the app's interface. Default: both.
+    #[must_use]
+    pub fn visibility(
+        mut self,
+        visibility: impl IntoIterator<Item = crate::apps::Visibility>,
+    ) -> Self {
+        self.visibility = Some(visibility.into_iter().collect());
+        self
+    }
+
+    /// The interface declared with [`ui`](Self::ui).
+    #[must_use]
+    pub fn ui_resource(&self) -> Option<&str> {
+        self.ui.as_deref()
     }
 
     /// Declares the OAuth scopes a caller needs (all of them). Enforced when

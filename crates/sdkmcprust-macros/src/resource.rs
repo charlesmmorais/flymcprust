@@ -24,6 +24,28 @@ struct ResourceArgs {
     ttl_ms: Option<LitInt>,
     cache: Option<LitStr>,
     scopes: Option<Vec<LitStr>>,
+    app: Option<syn::LitBool>,
+    csp_connect: Option<Vec<LitStr>>,
+    csp_resources: Option<Vec<LitStr>>,
+    csp_frames: Option<Vec<LitStr>>,
+    csp_base_uri: Option<Vec<LitStr>>,
+    permissions: Option<Vec<LitStr>>,
+    domain: Option<LitStr>,
+    prefers_border: Option<syn::LitBool>,
+}
+
+impl ResourceArgs {
+    /// Whether any MCP Apps setting other than `app` itself was given.
+    fn has_app_settings(&self) -> Option<proc_macro2::Span> {
+        let list = |l: &Option<Vec<LitStr>>| l.as_ref().and_then(|v| v.first()).map(LitStr::span);
+        list(&self.csp_connect)
+            .or_else(|| list(&self.csp_resources))
+            .or_else(|| list(&self.csp_frames))
+            .or_else(|| list(&self.csp_base_uri))
+            .or_else(|| list(&self.permissions))
+            .or_else(|| self.domain.as_ref().map(LitStr::span))
+            .or_else(|| self.prefers_border.as_ref().map(syn::LitBool::span))
+    }
 }
 
 fn parse_args(attr: TokenStream) -> syn::Result<ResourceArgs> {
@@ -69,13 +91,85 @@ fn parse_args(attr: TokenStream) -> syn::Result<ResourceArgs> {
                 params::set_once(&mut args.cache, key, lit)?;
             }
             "scopes" => params::set_once(&mut args.scopes, key, params::scopes(key, value)?)?,
+            "app" => params::set_once(&mut args.app, key, params::lit_bool(key, value)?)?,
+            "csp_connect" => params::set_once(
+                &mut args.csp_connect,
+                key,
+                params::string_list(key, value, "https://api.example.com")?,
+            )?,
+            "csp_resources" => params::set_once(
+                &mut args.csp_resources,
+                key,
+                params::string_list(key, value, "https://cdn.example.com")?,
+            )?,
+            "csp_frames" => params::set_once(
+                &mut args.csp_frames,
+                key,
+                params::string_list(key, value, "https://embed.example.com")?,
+            )?,
+            "csp_base_uri" => params::set_once(
+                &mut args.csp_base_uri,
+                key,
+                params::string_list(key, value, "https://example.com")?,
+            )?,
+            "permissions" => {
+                let list = params::string_list(key, value, "clipboardWrite")?;
+                for lit in &list {
+                    if !matches!(
+                        lit.value().as_str(),
+                        "camera" | "microphone" | "geolocation" | "clipboardWrite"
+                    ) {
+                        return Err(Error::new(
+                            lit.span(),
+                            "permissions are `\"camera\"`, `\"microphone\"`, \
+                             `\"geolocation\"` and `\"clipboardWrite\"`",
+                        ));
+                    }
+                }
+                params::set_once(&mut args.permissions, key, list)?;
+            }
+            "domain" => params::set_once(&mut args.domain, key, params::lit_str(key, value)?)?,
+            "prefers_border" => {
+                params::set_once(&mut args.prefers_border, key, params::lit_bool(key, value)?)?;
+            }
             _ => {
                 return Err(Error::new(
                     key.span(),
                     "unknown `resource` argument; expected a URI string, `template`, `name`, \
-                     `title`, `description`, `mime_type`, `ttl_ms`, `cache` or `scopes`",
+                     `title`, `description`, `mime_type`, `ttl_ms`, `cache`, `scopes`, `app`, \
+                     `csp_connect`, `csp_resources`, `csp_frames`, `csp_base_uri`, \
+                     `permissions`, `domain` or `prefers_border`",
                 ));
             }
+        }
+    }
+    let is_app = args.app.as_ref().is_some_and(|a| a.value);
+    if !is_app && let Some(span) = args.has_app_settings() {
+        return Err(Error::new(
+            span,
+            "MCP Apps settings need `app`, e.g. #[resource(\"ui://my-server/view\", app, ..)]",
+        ));
+    }
+    if is_app {
+        if let Some(t) = &args.template {
+            return Err(Error::new(
+                t.span(),
+                "an MCP Apps interface is a fixed `ui://` resource, not a template",
+            ));
+        }
+        if let Some(uri) = &args.uri
+            && !uri.value().starts_with("ui://")
+        {
+            return Err(Error::new(
+                uri.span(),
+                "an MCP Apps interface uses the `ui://` scheme, e.g. \"ui://my-server/view\"",
+            ));
+        }
+        if let Some(mime) = &args.mime_type {
+            return Err(Error::new(
+                mime.span(),
+                "`app` sets the MIME type to `text/html;profile=mcp-app`; remove `mime_type`",
+            ));
         }
     }
     match (&args.uri, &args.template) {
@@ -273,10 +367,36 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     };
     let title = opt(&args.title);
     let mime_type = opt(&args.mime_type);
+    let is_app = args.app.as_ref().is_some_and(|a| a.value);
     let mime_ref = match &args.mime_type {
         Some(l) => quote!(::core::option::Option::Some(#l)),
+        None if is_app => quote!(::core::option::Option::Some(#krate::apps::MIME_TYPE)),
         None => quote!(::core::option::Option::None),
     };
+    let app = is_app.then(|| {
+        let list = |method: &str, l: &Option<Vec<LitStr>>| {
+            let method = Ident::new(method, proc_macro2::Span::call_site());
+            l.as_ref().map(|items| quote!(.#method([#(#items),*])))
+        };
+        let connect = list("connect_domains", &args.csp_connect);
+        let resources = list("resource_domains", &args.csp_resources);
+        let frames = list("frame_domains", &args.csp_frames);
+        let base = list("base_uri_domains", &args.csp_base_uri);
+        let permissions = args.permissions.as_ref().map(|items| {
+            let variants = items.iter().map(|p| match p.value().as_str() {
+                "camera" => quote!(#krate::Permission::Camera),
+                "microphone" => quote!(#krate::Permission::Microphone),
+                "geolocation" => quote!(#krate::Permission::Geolocation),
+                _ => quote!(#krate::Permission::ClipboardWrite),
+            });
+            quote!(.permissions([#(#variants),*]))
+        });
+        let domain = args.domain.as_ref().map(|d| quote!(.domain(#d)));
+        let border = args.prefers_border.as_ref().map(|b| quote!(.prefers_border(#b)));
+        quote! {
+            .app(#krate::AppUi::new() #connect #resources #frames #base #permissions #domain #border)
+        }
+    });
 
     let definition = if let Some(uri) = &args.uri {
         quote! {
@@ -347,6 +467,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                     #ttl
                     #cache
                     #scopes
+                    #app
                     #(.require_state::<#state_types>())*
                     #(#complete_regs)*
             }

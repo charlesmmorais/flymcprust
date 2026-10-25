@@ -1,4 +1,4 @@
-error: unknown `tool` argument; expected `name`, `title`, `description`, `read_only`, `destructive`, `idempotent`, `open_world` or `scopes`
+error: unknown `tool` argument; expected `name`, `title`, `description`, `read_only`, `destructive`, `idempotent`, `open_world`, `scopes`, `ui` or `visibility`
  --> tests/ui/unknown_argument.rs:3:8
   |
 3 | #[tool(readonly)]

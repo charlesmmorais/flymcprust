@@ -1,0 +1,35 @@
+error: `ui` names an MCP Apps resource, e.g. `ui = "ui://my-server/view"`
+ --> tests/ui/invalid_app.rs:3:13
+  |
+3 | #[tool(ui = "https://example.com/view")]
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `visibility` values are `"model"` and `"app"`
+ --> tests/ui/invalid_app.rs:6:22
+  |
+6 | #[tool(visibility = ["everyone"])]
+  |                      ^^^^^^^^^^
+
+error: MCP Apps settings need `app`, e.g. #[resource("ui://my-server/view", app, ..)]
+ --> tests/ui/invalid_app.rs:9:42
+  |
+9 | #[resource("ui://x/view", csp_connect = ["https://api.example.com"])]
+  |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: an MCP Apps interface is a fixed `ui://` resource, not a template
+  --> tests/ui/invalid_app.rs:14:23
+   |
+14 | #[resource(template = "ui://x/{id}", app)]
+   |                       ^^^^^^^^^^^^^
+
+error: permissions are `"camera"`, `"microphone"`, `"geolocation"` and `"clipboardWrite"`
+  --> tests/ui/invalid_app.rs:19:47
+   |
+19 | #[resource("ui://x/view", app, permissions = ["telepathy"])]
+   |                                               ^^^^^^^^^^^
+
+error: `app` sets the MIME type to `text/html;profile=mcp-app`; remove `mime_type`
+  --> tests/ui/invalid_app.rs:24:44
+   |
+24 | #[resource("ui://x/view", app, mime_type = "text/html")]
+   |                                            ^^^^^^^^^^^

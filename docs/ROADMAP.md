@@ -79,5 +79,9 @@ minutes" guide.
 ## Not planned
 
 - A client SDK: `rmcp` covers it; the focus here is servers.
-- Tasks, MCP Apps and subscriptions wait until there is demand; the
-  architecture keeps room for them (ARCHITECTURE §12).
+- Tasks and subscriptions wait until there is demand; the architecture keeps
+  room for them (ARCHITECTURE §12). The README explains why.
+
+MCP Apps (`io.modelcontextprotocol/ui`) moved from this list to done: a
+procurement-study assistant (ETP) needs editable tables and section forms
+that elicitation cannot express.

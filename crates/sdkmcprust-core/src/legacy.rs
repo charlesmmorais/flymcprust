@@ -260,8 +260,18 @@ impl LegacyConfig {
     ) -> Self {
         let mut capabilities = serde_json::to_value(capabilities).unwrap_or_default();
         if let Value::Object(map) = &mut capabilities {
-            // Extensions are a 2026-07-28 concept.
+            // Extensions are formalized in 2026-07-28, but MCP Apps hosts
+            // already negotiate `io.modelcontextprotocol/ui` with 2025-11-25.
+            let apps = map
+                .get("extensions")
+                .and_then(|e| e.get(crate::apps::EXTENSION_ID))
+                .cloned();
             map.remove("extensions");
+            if let Some(settings) = apps {
+                let mut extensions = Map::new();
+                extensions.insert(crate::apps::EXTENSION_ID.to_owned(), settings);
+                map.insert("extensions".to_owned(), Value::Object(extensions));
+            }
         }
         Self {
             enabled,
@@ -527,6 +537,31 @@ mod tests {
         assert!(peer.request("elicitation/create", &params).await.is_err());
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(peer.pending.lock().is_empty());
+    }
+
+    #[test]
+    fn legacy_capabilities_keep_only_the_apps_extension() {
+        let mut extensions = std::collections::BTreeMap::new();
+        extensions.insert(crate::apps::EXTENSION_ID.to_owned(), Map::new());
+        extensions.insert("com.example/other".to_owned(), Map::new());
+        let capabilities = spec::ServerCapabilities {
+            extensions: Some(extensions),
+            ..spec::ServerCapabilities::default()
+        };
+        let info = spec::Implementation::new("s".to_owned(), "1".to_owned());
+        let config = LegacyConfig::new(true, Duration::from_secs(60), &capabilities, &info, None);
+        assert_eq!(
+            config.capabilities["extensions"],
+            serde_json::json!({ "io.modelcontextprotocol/ui": {} })
+        );
+        let plain = LegacyConfig::new(
+            true,
+            Duration::from_secs(60),
+            &spec::ServerCapabilities::default(),
+            &info,
+            None,
+        );
+        assert!(plain.capabilities.get("extensions").is_none());
     }
 
     #[test]

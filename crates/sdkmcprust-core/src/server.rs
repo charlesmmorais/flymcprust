@@ -104,6 +104,14 @@ pub enum BuildError {
     /// No random `requestState` key could be generated.
     #[error("could not generate a random requestState key: {0}")]
     RandomUnavailable(String),
+    /// An MCP Apps interface or a tool's `ui` is invalid.
+    #[error("invalid MCP Apps interface `{uri}`: {reason}")]
+    InvalidApp {
+        /// The `ui://` URI (or the tool name).
+        uri: String,
+        /// What is wrong.
+        reason: String,
+    },
     /// A handler declares a malformed OAuth scope.
     #[error("`{handler}` declares an invalid scope `{scope}`")]
     InvalidScope {
@@ -166,6 +174,11 @@ impl BuildError {
             ),
             Self::RandomUnavailable(_) => "the operating system did not provide randomness; set \
                  a key explicitly with `.request_state_key(..)`"
+                .to_owned(),
+            Self::InvalidApp { .. } => "MCP Apps interfaces are fixed `ui://` resources marked \
+                 with #[resource(\"ui://..\", app)] (or `ResourceDef::app`), and \
+                 #[tool(ui = \"ui://..\")] must name one of them; CSP origins look like \
+                 `https://api.example.com`"
                 .to_owned(),
             Self::InvalidScope { .. } => "scopes are non-empty and use visible ASCII except `\"` \
                  and `\\`, without spaces (for example `files:read`)"
@@ -460,6 +473,21 @@ impl ServerBuilder {
                 return Err(BuildError::DuplicateTool(a.tool.name.clone()));
             }
         }
+        for def in &mut tools {
+            if def.ui.is_some() || def.visibility.is_some() {
+                if def.visibility.as_ref().is_some_and(Vec::is_empty) {
+                    return Err(BuildError::InvalidApp {
+                        uri: def.tool.name.clone(),
+                        reason: "`visibility` must name `model`, `app` or both".to_owned(),
+                    });
+                }
+                crate::apps::tool_meta(
+                    &mut def.tool.meta,
+                    def.ui.as_deref(),
+                    def.visibility.as_deref(),
+                );
+            }
+        }
         let mut mirrored = Vec::with_capacity(tools.len());
         for def in &tools {
             if !is_valid_tool_name(&def.tool.name) {
@@ -493,6 +521,30 @@ impl ServerBuilder {
         let resources = build_resources(self.resources, &self.state)?;
         let prompts = build_prompts(self.prompts, &self.state)?;
 
+        // A tool's interface must be one of the registered app resources.
+        for def in &tools {
+            if let Some(uri) = &def.ui {
+                let found = resources
+                    .statics
+                    .iter()
+                    .any(|r| r.uri == *uri && r.app.is_some());
+                if !found {
+                    return Err(BuildError::InvalidApp {
+                        uri: uri.clone(),
+                        reason: format!(
+                            "tool `{}` shows it, but no resource with this URI is marked as an \
+                             app",
+                            def.tool.name
+                        ),
+                    });
+                }
+            }
+        }
+        let uses_apps = tools
+            .iter()
+            .any(|t| t.ui.is_some() || t.visibility.is_some())
+            || resources.statics.iter().any(|r| r.app.is_some());
+
         let mut extensions = BTreeMap::new();
         for ext in &self.extensions {
             let id = ext.id();
@@ -500,6 +552,12 @@ impl ServerBuilder {
                 return Err(BuildError::InvalidExtension(id.to_owned()));
             }
             extensions.insert(id.to_owned(), ext.settings());
+        }
+        if uses_apps {
+            // No server settings are defined for MCP Apps.
+            extensions
+                .entry(crate::apps::EXTENSION_ID.to_owned())
+                .or_insert_with(Map::new);
         }
 
         let result_meta = self.include_server_info.then(|| spec::ResultMetaObject {
@@ -697,6 +755,8 @@ struct RegisteredResource {
     ttl_ms: u64,
     cache_scope: CacheScope,
     scopes: Box<[String]>,
+    /// `_meta.ui` of an MCP Apps interface, repeated in read results.
+    app: Option<Value>,
 }
 
 struct RegisteredTemplate {
@@ -787,16 +847,38 @@ fn build_resources(defs: Vec<ResourceDef>, state: &TypeMap) -> Result<BuiltResou
                     });
                 }
                 check_completers(&def.completers, &resource.uri, &[])?;
+                let app = match &def.app {
+                    None => None,
+                    Some(ui) => {
+                        let invalid = |reason: String| BuildError::InvalidApp {
+                            uri: resource.uri.clone(),
+                            reason,
+                        };
+                        if !resource.uri.starts_with(crate::apps::URI_SCHEME) {
+                            return Err(invalid("the URI must use the `ui://` scheme".to_owned()));
+                        }
+                        ui.validate().map_err(invalid)?;
+                        Some(ui.to_meta())
+                    }
+                };
                 statics.push(RegisteredResource {
                     uri: resource.uri.clone(),
                     read: def.read,
                     ttl_ms,
                     cache_scope: def.cache_scope,
                     scopes: def.scopes.into(),
+                    app,
                 });
                 listed.push(resource);
             }
             ResourceKind::Template(template) => {
+                if def.app.is_some() {
+                    return Err(BuildError::InvalidApp {
+                        uri: template.uri_template,
+                        reason: "an interface is a fixed `ui://` resource, not a template"
+                            .to_owned(),
+                    });
+                }
                 let parsed = UriTemplate::parse(&template.uri_template).map_err(|e| {
                     BuildError::InvalidResource {
                         uri: template.uri_template.clone(),
@@ -1388,7 +1470,11 @@ impl Server {
 
     /// Finds the handler for a URI: an exact static resource first, then the
     /// first matching template.
-    fn find_resource(&self, uri: &str) -> Option<(ReadFn, UriVars, u64, CacheScope, &[String])> {
+    #[allow(clippy::type_complexity)]
+    fn find_resource(
+        &self,
+        uri: &str,
+    ) -> Option<(ReadFn, UriVars, u64, CacheScope, &[String], Option<&Value>)> {
         if let Some(r) = self
             .inner
             .resources
@@ -1402,12 +1488,13 @@ impl Server {
                 r.ttl_ms,
                 r.cache_scope,
                 &r.scopes,
+                r.app.as_ref(),
             ));
         }
         self.inner.templates.iter().find_map(|t| {
             t.template
                 .matches(uri)
-                .map(|vars| (t.read, vars, t.ttl_ms, t.cache_scope, &*t.scopes))
+                .map(|vars| (t.read, vars, t.ttl_ms, t.cache_scope, &*t.scopes, None))
         })
     }
 
@@ -1417,7 +1504,7 @@ impl Server {
         ctx: Ctx,
         cancellation: &CancellationToken,
     ) -> Result<Option<Box<RawValue>>, HandlerError> {
-        let (read, vars, ttl_ms, cache_scope, scopes) = self
+        let (read, vars, ttl_ms, cache_scope, scopes, app) = self
             .find_resource(uri)
             .ok_or_else(|| McpError::resource_not_found(uri))?;
         authorize(scopes, &ctx)?;
@@ -1432,7 +1519,11 @@ impl Server {
         if let Some(notifier) = notifier {
             notifier.finish().await;
         }
-        let contents = outcome.map_err(|e| HandlerError::from_tool(e, "resource", Some(uri)))?;
+        let mut contents =
+            outcome.map_err(|e| HandlerError::from_tool(e, "resource", Some(uri)))?;
+        if let Some(ui) = app {
+            crate::apps::mark_contents(&mut contents, ui);
+        }
         let mut result =
             spec::ReadResourceResult::new(cache_scope, contents, COMPLETE.to_owned(), ttl_ms);
         self.with_server_info(&mut result.meta);

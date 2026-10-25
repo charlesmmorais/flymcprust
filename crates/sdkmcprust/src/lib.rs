@@ -45,13 +45,13 @@
 #![forbid(unsafe_code)]
 
 pub use sdkmcprust_core::{
-    BuildError, CompleteFn, Completion, CompletionRequest, Ctx, Elicitation, ErrorKind, Extension,
-    IntoContent, IntoPromptResult, IntoResourceContents, IntoToolError, IntoToolResult, Json,
-    Limits, MIN_REQUEST_STATE_KEY_BYTES, McpError, McpRequest, MirroredParam, ParamKind, Principal,
-    Prompt, PromptArguments, PromptDef, Resource, ResourceContents, ResourceDef, Server,
-    ServerBuilder, State, TokenError, TokenVerifier, Tool, ToolDef, ToolError, ToolOutput,
-    ToolResult, TransportContext, UriTemplate, UriTemplateError, UriVars, auth, jsonrpc, message,
-    security, spec, transport,
+    AppUi, BuildError, CompleteFn, Completion, CompletionRequest, Ctx, Elicitation, ErrorKind,
+    Extension, IntoContent, IntoPromptResult, IntoResourceContents, IntoToolError, IntoToolResult,
+    Json, Limits, MIN_REQUEST_STATE_KEY_BYTES, McpError, McpRequest, MirroredParam, ParamKind,
+    Permission, Principal, Prompt, PromptArguments, PromptDef, Resource, ResourceContents,
+    ResourceDef, Server, ServerBuilder, State, TokenError, TokenVerifier, Tool, ToolDef, ToolError,
+    ToolOutput, ToolResult, TransportContext, UriTemplate, UriTemplateError, UriVars, Visibility,
+    apps, auth, jsonrpc, message, security, spec, transport,
 };
 
 #[cfg(feature = "macros")]
@@ -104,10 +104,11 @@ pub mod __private {
     pub use serde_json::value::RawValue;
 
     pub use sdkmcprust_core::{
-        Completion, CompletionRequest, Ctx, IntoPromptResult, IntoResourceContents, IntoToolResult,
-        Prompt, PromptArguments, PromptDef, PromptFuture, Resource, ResourceDef, ResourceFuture,
-        Tool, ToolDef, ToolError, ToolFuture, UriVars, input_schema_for, output_schema_from,
-        parse_arguments, parse_optional_uri_var, parse_uri_var, spec,
+        AppUi, Completion, CompletionRequest, Ctx, IntoPromptResult, IntoResourceContents,
+        IntoToolResult, Permission, Prompt, PromptArguments, PromptDef, PromptFuture, Resource,
+        ResourceDef, ResourceFuture, Tool, ToolDef, ToolError, ToolFuture, UriVars, Visibility,
+        apps, input_schema_for, output_schema_from, parse_arguments, parse_optional_uri_var,
+        parse_uri_var, spec,
     };
 
     #[cfg(feature = "auto-register")]

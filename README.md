@@ -6,8 +6,8 @@
 **Status:** complete MCP server SDK for protocol 2026-07-28 (all 147 checks
 of the official conformance suite pass) that also serves 2025-11-25 and
 2025-06-18 clients: tools, resources, prompts, completion, multi round-trip
-requests, progress and logging, over stdio and Streamable HTTP, with
-OAuth 2.1 authorization on HTTP. Next: the first release; see the
+requests, progress and logging, MCP Apps interfaces, over stdio and
+Streamable HTTP, with OAuth 2.1 authorization on HTTP. Next: the first release; see the
 [roadmap](docs/ROADMAP.md). Not published on crates.io yet.
 
 - **Spec-first.** Targets MCP revision **2026-07-28**: stateless, with no
@@ -220,6 +220,46 @@ let service = StreamableHttpService::with_config(server, config);
 - stdio is not authorized this way: per the specification, it takes
   credentials from its environment.
 
+### Interactive interfaces (MCP Apps)
+
+```rust
+/// The price survey, as an editable table.
+#[resource(
+    "ui://etp/price-survey",
+    app,
+    csp_connect = ["https://api.example.gov.br"],
+    prefers_border = true
+)]
+fn price_table() -> String {
+    include_str!("price_table.html").to_owned()
+}
+
+/// Shows the price survey of an item.
+#[tool(read_only, ui = "ui://etp/price-survey")]
+fn price_survey(ctx: Ctx, item: String) -> String {
+    // Hosts without MCP Apps (and the model) read this text.
+    format!("Price survey of {item}: median R$ 10.00 (5 sources).")
+}
+
+/// Recomputes the reference price; only the table calls it.
+#[tool(visibility = ["app"])]
+fn recompute(prices: Vec<f64>) -> f64 { /* ... */ }
+```
+
+- `app` turns a fixed `ui://` resource into an interface: an HTML5 page
+  served as `text/html;profile=mcp-app`. Hosts render it in a sandboxed
+  iframe that may load nothing from the network unless you list the origins
+  (`csp_connect`, `csp_resources`, `csp_frames`, `csp_base_uri`); browser
+  `permissions` and `prefers_border` are also available.
+- `ui = ".."` on a tool shows its results in that interface;
+  `visibility = ["app"]` leaves a tool to the interface and hides it from the
+  model.
+- The build fails if a tool names an interface that is not registered, or
+  if an origin is malformed. The extension is declared in `server/discover`
+  (and to 2025-11-25 hosts such as Claude Desktop) automatically.
+- Tools still return text: hosts without MCP Apps show it.
+  `ctx.client_supports_apps()` tells you whether the host renders the page.
+
 ## Features
 
 | Feature | Default | Description |
@@ -250,8 +290,42 @@ let service = StreamableHttpService::with_config(server, config);
 | Multi round-trip requests: elicitation, sampling, roots; signed `requestState` | ✅ |
 | Progress (`notifications/progress`), logging (`notifications/message`, deprecated), SSE response streaming | ✅ |
 | OAuth 2.1 authorization (resource server): bearer tokens, RFC 9728 metadata, `401`/`403` challenges, per-handler scopes | ✅ (built-in JWT verifier with the `oauth` feature, or bring a `TokenVerifier`) |
-| Subscriptions, Tasks, MCP Apps | Not planned until there is demand; the architecture reserves their place ([ARCHITECTURE](docs/ARCHITECTURE.md) §12) |
+| MCP Apps (`io.modelcontextprotocol/ui`): `ui://` interfaces, CSP, tool visibility | ✅ |
+| Subscriptions, Tasks extension, MCP client | Not implemented; see [What is not implemented, and why](#what-is-not-implemented-and-why) |
 | 2025-11-25 and 2025-06-18 clients: `initialize`, `ping`, signed sessions, `ctx.elicit` as server-to-client requests (stdio and SSE) | ✅ (on by default; `legacy_clients(false)` turns it off) |
+
+### What is not implemented, and why
+
+The goal is the best SDK for building MCP **servers**: efficient, simple
+and secure. Feature parity with the official
+[`rmcp`](https://github.com/modelcontextprotocol/rust-sdk) SDK is not a goal,
+so features are added when real servers need them. Three are left out on
+purpose; the architecture keeps room for each
+([ARCHITECTURE](docs/ARCHITECTURE.md) §12).
+
+- **MCP client.** A client is what *uses* servers: Claude, IDEs, agents. A
+  server author does not need one, `rmcp` already provides a good one, and
+  duplicating it would double the code (and the attack surface) without
+  helping anyone build servers. For tests there is the in-process
+  `testing::TestClient`.
+- **Subscriptions** (`subscriptions/listen`, and `resources/subscribe` for
+  2025-11-25 clients). They keep one connection open per listening client,
+  while this SDK is stateless: any instance answers any request, which is
+  what makes it cheap to run and to scale horizontally. With several
+  instances, an event published on one does not reach clients listening on
+  another without a message bus. Few clients rely on them: most read a
+  resource again, guided by the `ttlMs` and `cacheScope` hints this SDK
+  already sends. They are the only 2 failing checks of the 2025-11-25
+  conformance suite (76/78).
+- **Tasks** (the `io.modelcontextprotocol/tasks` extension). The server
+  keeps each task's state (progress, result, pending questions) for minutes
+  or hours, and with several instances every request about a task must reach
+  the instance that runs it. For long tools, the SDK already offers progress
+  notifications, cancellation and questions to the user during the call
+  (`ctx.elicit`), which cover most cases without server-side state.
+
+They can be added later without rewriting the core: Tasks plugs into the
+extension mechanism, and subscriptions would reuse the SSE streaming path.
 
 ### Official conformance suite
 

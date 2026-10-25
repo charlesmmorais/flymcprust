@@ -52,6 +52,7 @@ pub struct ResourceDef {
     pub(crate) cache_scope: CacheScope,
     pub(crate) completers: Vec<Completer>,
     pub(crate) scopes: Vec<String>,
+    pub(crate) app: Option<crate::apps::AppUi>,
 }
 
 impl ResourceDef {
@@ -64,7 +65,30 @@ impl ResourceDef {
             cache_scope: CacheScope::Private,
             completers: Vec::new(),
             scopes: Vec::new(),
+            app: None,
         }
+    }
+
+    /// Makes this an MCP Apps interface: an HTML5 page served with the
+    /// `text/html;profile=mcp-app` MIME type at a `ui://` URI, sandboxed as
+    /// `ui` describes. Tools show it with [`ToolDef::ui`](crate::ToolDef::ui).
+    #[must_use]
+    pub fn app(mut self, ui: crate::apps::AppUi) -> Self {
+        if let ResourceKind::Static(resource) = &mut self.kind {
+            resource.mime_type = Some(crate::apps::MIME_TYPE.to_owned());
+            resource
+                .meta
+                .get_or_insert_with(Default::default)
+                .insert("ui".to_owned(), ui.to_meta());
+        }
+        self.app = Some(ui);
+        self
+    }
+
+    /// Whether this is an MCP Apps interface.
+    #[must_use]
+    pub fn is_app(&self) -> bool {
+        self.app.is_some()
     }
 
     /// Declares the OAuth scopes a caller needs (all of them). Enforced when

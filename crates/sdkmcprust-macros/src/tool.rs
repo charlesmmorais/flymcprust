@@ -25,6 +25,8 @@ struct ToolArgs {
     idempotent: Option<LitBool>,
     open_world: Option<LitBool>,
     scopes: Option<Vec<LitStr>>,
+    ui: Option<LitStr>,
+    visibility: Option<Vec<LitStr>>,
 }
 
 fn parse_args(attr: TokenStream) -> syn::Result<ToolArgs> {
@@ -65,10 +67,42 @@ fn parse_args(attr: TokenStream) -> syn::Result<ToolArgs> {
         } else if let Some(key) = meta.path.get_ident().filter(|i| *i == "scopes") {
             let value: syn::Expr = meta.value()?.parse()?;
             params::set_once(&mut args.scopes, key, params::scopes(key, &value)?)
+        } else if meta.path.is_ident("ui") {
+            let lit: LitStr = meta.value()?.parse()?;
+            if !lit.value().starts_with("ui://") || lit.value().len() <= "ui://".len() {
+                return Err(Error::new(
+                    lit.span(),
+                    "`ui` names an MCP Apps resource, e.g. `ui = \"ui://my-server/view\"`",
+                ));
+            }
+            if args.ui.is_some() {
+                return Err(meta.error("duplicate argument"));
+            }
+            args.ui = Some(lit);
+            Ok(())
+        } else if let Some(key) = meta.path.get_ident().filter(|i| *i == "visibility") {
+            let value: syn::Expr = meta.value()?.parse()?;
+            let list = params::string_list(key, &value, "app")?;
+            if list.is_empty() {
+                return Err(Error::new_spanned(
+                    &value,
+                    "`visibility` needs `\"model\"`, `\"app\"` or both",
+                ));
+            }
+            for lit in &list {
+                if !matches!(lit.value().as_str(), "model" | "app") {
+                    return Err(Error::new(
+                        lit.span(),
+                        "`visibility` values are `\"model\"` and `\"app\"`",
+                    ));
+                }
+            }
+            params::set_once(&mut args.visibility, key, list)
         } else {
             Err(meta.error(
                 "unknown `tool` argument; expected `name`, `title`, `description`, \
-                 `read_only`, `destructive`, `idempotent`, `open_world` or `scopes`",
+                 `read_only`, `destructive`, `idempotent`, `open_world`, `scopes`, `ui` or \
+                 `visibility`",
             ))
         }
     });
@@ -94,6 +128,17 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let params = params::collect_params(&mut func, &OPTIONS)?;
     let krate = params::krate();
     let scopes = params::scopes_call(args.scopes.as_ref());
+    let ui = args.ui.as_ref().map(|uri| quote!(.ui(#uri)));
+    let visibility = args.visibility.as_ref().map(|list| {
+        let variants = list.iter().map(|lit| {
+            if lit.value() == "model" {
+                quote!(#krate::Visibility::Model)
+            } else {
+                quote!(#krate::Visibility::App)
+            }
+        });
+        quote!(.visibility([#(#variants),*]))
+    });
     let fn_ident = &func.sig.ident;
     let vis = &func.vis;
 
@@ -230,6 +275,8 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                 #krate::ToolDef::new(tool, __call)
                     #(.require_state::<#state_types>())*
                     #scopes
+                    #ui
+                    #visibility
             }
         }
 

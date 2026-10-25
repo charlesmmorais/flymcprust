@@ -414,7 +414,15 @@ struct KeyValue {
 
 impl Parse for KeyValue {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let key = input.parse()?;
+        let key: Ident = input.parse()?;
+        if !input.peek(Token![=]) {
+            // A bare flag, such as `app`, means `app = true`.
+            let value = Expr::Lit(ExprLit {
+                attrs: Vec::new(),
+                lit: Lit::Bool(syn::LitBool::new(true, key.span())),
+            });
+            return Ok(Self { key, value });
+        }
         input.parse::<Token![=]>()?;
         Ok(Self {
             key,
@@ -439,15 +447,9 @@ pub(crate) fn lit_str(key: &Ident, value: &Expr) -> syn::Result<LitStr> {
 /// `scopes = ["a", "b"]`: OAuth scopes a handler needs, checked here so a
 /// malformed scope is a compile error.
 pub(crate) fn scopes(key: &Ident, value: &Expr) -> syn::Result<Vec<LitStr>> {
-    let Expr::Array(ExprArray { elems, .. }) = value else {
-        return Err(Error::new_spanned(
-            value,
-            format!("`{key}` expects an array of strings, e.g. `{key} = [\"files:read\"]`"),
-        ));
-    };
-    let mut scopes = Vec::with_capacity(elems.len());
-    for elem in elems {
-        let lit = lit_str(key, elem)?;
+    let list = string_list(key, value, "files:read")?;
+    let mut scopes = Vec::with_capacity(list.len());
+    for lit in list {
         let scope = lit.value();
         let valid = !scope.is_empty()
             && scope
@@ -462,6 +464,31 @@ pub(crate) fn scopes(key: &Ident, value: &Expr) -> syn::Result<Vec<LitStr>> {
         scopes.push(lit);
     }
     Ok(scopes)
+}
+
+/// `key = ["a", "b"]`: an array of string literals.
+pub(crate) fn string_list(key: &Ident, value: &Expr, example: &str) -> syn::Result<Vec<LitStr>> {
+    let Expr::Array(ExprArray { elems, .. }) = value else {
+        return Err(Error::new_spanned(
+            value,
+            format!("`{key}` expects an array of strings, e.g. `{key} = [\"{example}\"]`"),
+        ));
+    };
+    elems.iter().map(|elem| lit_str(key, elem)).collect()
+}
+
+/// A boolean literal argument value.
+pub(crate) fn lit_bool(key: &Ident, value: &Expr) -> syn::Result<syn::LitBool> {
+    match value {
+        Expr::Lit(ExprLit {
+            lit: Lit::Bool(lit),
+            ..
+        }) => Ok(lit.clone()),
+        other => Err(Error::new_spanned(
+            other,
+            format!("`{key}` expects `true` or `false`"),
+        )),
+    }
 }
 
 /// The `.scopes([..])` call for declared scopes (nothing when none).
