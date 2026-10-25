@@ -200,7 +200,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                     #(#fields,)*
                 }
 
-                #[allow(unused_variables, clippy::needless_pass_by_value)]
+                #[allow(unused_variables, non_snake_case, clippy::needless_pass_by_value)]
                 fn __call(
                     arguments: ::core::option::Option<&#krate::RawValue>,
                     __ctx: #krate::Ctx,

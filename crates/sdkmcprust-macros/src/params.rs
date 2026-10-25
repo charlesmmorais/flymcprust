@@ -371,6 +371,7 @@ pub(crate) fn completers(params: &[Param]) -> (Vec<TokenStream>, Vec<TokenStream
             },
         };
         fns.push(quote! {
+            #[allow(non_snake_case)]
             fn #fn_ident(request: &#krate::CompletionRequest<'_>) -> #krate::Completion {
                 #body
             }

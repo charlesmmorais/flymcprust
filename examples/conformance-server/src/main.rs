@@ -6,12 +6,14 @@
 //! conformance-server [ADDR]      # default 127.0.0.1:3000, endpoint /mcp
 //! ```
 //!
-//! Fixtures that need features outside phase 1 (progress, logging,
-//! sampling and elicitation via MRTR, resources, prompts) are not
-//! implemented; they are listed in `conformance-baseline.yml`.
+//! Fixtures that need features the SDK does not have yet (progress and
+//! logging notifications, response streaming) are not implemented; they are
+//! listed in `conformance-baseline.yml`.
 #![forbid(unsafe_code)]
 // A CLI fixture: status messages go to stderr.
 #![allow(clippy::print_stderr)]
+
+mod fixtures;
 
 use std::process::ExitCode;
 
@@ -151,7 +153,7 @@ async fn main() -> ExitCode {
     let server = json_schema_tool()
         .map_err(|e| e.to_string())
         .and_then(|schema_tool| {
-            Server::builder("sdkmcprust-conformance", env!("CARGO_PKG_VERSION"))
+            let builder = Server::builder("sdkmcprust-conformance", env!("CARGO_PKG_VERSION"))
                 .tool::<test_simple_text>()
                 .tool::<test_image_content>()
                 .tool::<test_audio_content>()
@@ -160,7 +162,8 @@ async fn main() -> ExitCode {
                 .tool::<test_error_handling>()
                 .tool::<test_missing_capability>()
                 .tool::<test_custom_header>()
-                .tool_def(schema_tool)
+                .tool_def(schema_tool);
+            fixtures::register(builder)
                 .build()
                 .map_err(|e| e.to_string())
         });

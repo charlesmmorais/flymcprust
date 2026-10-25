@@ -3,17 +3,19 @@
 > Working title. A Rust SDK for building [Model Context Protocol](https://modelcontextprotocol.io)
 > servers, with the ergonomics of FastMCP and the guarantees of Rust.
 
-**Status:** phase 1 (tools over stdio and Streamable HTTP). Not published yet.
+**Status:** phase 2 (tools, resources, prompts, completion and multi
+round-trip requests over stdio and Streamable HTTP). Not published yet.
 
 - **Spec-first.** Targets MCP revision **2026-07-28**: stateless, with no
   `initialize` and no sessions. Protocol types are generated from the official
   `schema.json`/`schema.ts`, and deprecations become `#[deprecated]`.
-- **Ergonomic.** Tools are plain (async) functions. Input and output JSON
-  Schemas, descriptions and annotations come from the signature and doc
-  comments.
+- **Ergonomic.** Tools, resources and prompts are plain (async) functions.
+  Schemas, descriptions, arguments and annotations come from the signature
+  and doc comments. Asking the user for input is one `ctx.elicit(..).await?`.
 - **Safe.** No `unsafe`, no panics on the request path, and secure defaults:
-  message size, JSON depth, tool timeout, concurrency, Origin/Host checks,
-  localhost binding. Internal errors are never exposed to clients.
+  message size, JSON depth, handler timeout, concurrency, Origin/Host checks,
+  localhost binding, signed `requestState`. Internal errors are never exposed
+  to clients.
 - **Fast.** Parsing borrows the request buffer, tool arguments deserialize
   directly into their struct, and list responses are pre-serialized.
 - **Composable.** The server is a `tower::Service`, and so is the HTTP
@@ -72,14 +74,83 @@ parameters, unknown arguments, invalid names, contradictory hints.
 Register tools explicitly with `.tool::<add>()`. With the `auto-register`
 feature, `.auto_tools()` collects every `#[tool]` in the binary.
 
+### Resources and prompts
+
+```rust
+/// The application configuration.
+#[resource("config://app", mime_type = "application/json", cache = "public", ttl_ms = 60000)]
+fn app_config(cfg: State<Config>) -> Json<Config> {
+    Json(cfg.clone())
+}
+
+/// A user's profile.
+#[resource(template = "users://{id}/profile", mime_type = "text/plain")]
+async fn profile(#[complete(user_ids)] id: u64, db: State<Db>) -> Result<String, ToolError> {
+    db.profile(id).await.ok_or_else(ToolError::not_found) // -32602 with data.uri
+}
+
+/// Reviews a piece of code.
+///
+/// # Arguments
+/// * `code` - The code to review.
+/// * `language` - Its programming language.
+#[prompt]
+fn code_review(code: String, #[complete(values = ["rust", "python"])] language: Option<String>) -> String {
+    format!("Review this {} code: {code}", language.as_deref().unwrap_or("source"))
+}
+```
+
+- **Templates** use RFC 6570 (`{var}`, `{+path}`, `{/segment}`, `{?query}`).
+  Variables become typed parameters (`FromStr`); a value that does not parse
+  means the resource does not exist.
+- **Prompt arguments** are typed parameters too; `Option<T>` is optional.
+- **Completion** comes from `#[complete(function)]` or
+  `#[complete(values = [..])]` on a prompt argument or template variable.
+- `Ctx` and `State<T>` work as in tools. Template mistakes, unknown
+  variables and bad options are compile errors.
+
+### Asking the user for input
+
+In 2026-07-28 the server cannot call the client mid-request. It answers
+`input_required`, and the client retries with the answers (multi
+round-trip requests). The SDK hides the round trips:
+
+```rust
+#[derive(Deserialize, JsonSchema)]
+struct Confirm {
+    /// Whether to deploy.
+    confirmed: bool,
+}
+
+#[tool(destructive)]
+async fn deploy(ctx: Ctx, env: String) -> Result<String, ToolError> {
+    let answer: Confirm = ctx.elicit("confirm", format!("Deploy to {env}?")).await?;
+    if !answer.confirmed {
+        return Err(ToolError::user("cancelled by the user"));
+    }
+    Ok(format!("deployed to {env}"))
+}
+```
+
+- The handler **reruns from the start** on each retry, and earlier answers
+  come back immediately. Keep code before an input call free of side effects.
+- Questions awaited together (`tokio::join!`) go out in one round.
+- Answers from earlier rounds travel in `requestState`, which is signed
+  (HMAC-SHA256) and bound to the tool, its arguments and an expiry.
+  Behind a load balancer, give every instance the same key with
+  `.request_state_key(..)`.
+- The client capability is checked first (`-32021` if missing). Works in
+  tools, resources and prompts. `ctx.sample(..)` and `ctx.list_roots(..)`
+  exist too, deprecated like the features themselves (SEP-2577).
+
 ## Features
 
 | Feature | Default | Description |
 | --- | --- | --- |
-| `macros` | yes | The `#[tool]` attribute. |
+| `macros` | yes | The `#[tool]`, `#[resource]` and `#[prompt]` attributes. |
 | `stdio` | no | stdio transport. |
 | `http` | no | Streamable HTTP transport (`tower::Service` plus a hyper server). |
-| `auto-register` | no | `ServerBuilder::auto_tools()`. |
+| `auto-register` | no | `auto_tools()`, `auto_resources()` and `auto_prompts()` on the builder. |
 | `test-client` | no | In-process `testing::TestClient` for integration tests. |
 
 ## Protocol support (2026-07-28)
@@ -94,7 +165,12 @@ feature, `.auto_tools()` collects every `#[tool]` in the binary.
 | `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` validation (`-32020`), base64 sentinel | ✅ |
 | `x-mcp-header` → `Mcp-Param-*` validation (SEP-2243) | ✅ |
 | Origin/Host allowlists (DNS-rebinding protection), CORS preflight | ✅ |
-| Resources, prompts, completion, subscriptions, MRTR, Tasks, Apps, OAuth | Planned; the architecture already reserves their place ([ARCHITECTURE](docs/ARCHITECTURE.md) §12) |
+| Resources and resource templates (`resources/list`, `templates/list`, `read`), caching hints | ✅ |
+| Prompts (`prompts/list`, `prompts/get`) | ✅ |
+| Completion (`completion/complete`) | ✅ |
+| Multi round-trip requests: elicitation, sampling, roots; signed `requestState` | ✅ |
+| Progress and logging notifications, response streaming | Planned |
+| Subscriptions, Tasks, Apps, OAuth | Planned; the architecture already reserves their place ([ARCHITECTURE](docs/ARCHITECTURE.md) §12) |
 | 2025-11-25 (legacy) clients | Planned (transport-edge adapter). Today they get an error naming the supported versions |
 
 ### Official conformance suite
@@ -106,18 +182,24 @@ server scenario against it. Known gaps are listed in
 other failure or on a stale entry.
 
 Results with `@modelcontextprotocol/conformance@0.2.0-alpha.12` on 2026-10-25:
-**108 checks pass and 26 fail**. Every failure is in a feature not built yet
-(resources, prompts, completion, progress, logging, MRTR).
+**144 checks pass and 3 fail**, with no warnings. The 3 failures need progress
+notifications, logging notifications and response streaming, which are not
+built yet.
 
 | Scenario | Result |
 | --- | --- |
-| `server-stateless` | 23/25 (the 2 failures need logging/MRTR fixtures) |
+| `server-stateless` | 23/25 (the 2 failures need logging and streaming fixtures) |
 | `tools-list`, `tools-call-{simple-text,image,audio,embedded-resource,mixed-content,error}` | all pass |
+| `resources-{list,read-text,read-binary,templates-read}`, `sep-2164-resource-not-found` | all pass |
+| `prompts-{list,get-simple,get-with-args,get-embedded-resource,get-with-image}` | all pass |
+| `completion-complete` | 2/2 |
+| `input-required-result-*` (14 MRTR scenarios, including tampered state) | all pass |
+| `caching` | 8/8 |
 | `json-schema-2020-12` | 8/8 |
 | `http-header-validation` | 14/14 |
 | `http-custom-header-server-validation` | 10/10 |
 | `dns-rebinding-protection` | 2/2 |
-| `caching` | 4/7 (the 3 failures are prompts/resources lists) |
+| `tools-call-with-progress` | 1/2 (progress notifications) |
 
 To reproduce locally, run `cargo run -p conformance-server`, then:
 
@@ -182,7 +264,9 @@ async fn adds() {
 `cargo bench -p sdkmcprust-core` (criterion). Phase 1 baseline, measured on
 2026-10-25 on an Intel Core i5-12450HX laptop (16 GB, Windows 11) with Rust
 1.99.1. Laptop measurements vary by about ±20% between runs because of
-thermal throttling.
+thermal throttling. Phase 2 was compared with this code by interleaving runs
+of both versions on the same machine: the `tools/call` path showed no
+measurable change (MRTR digests are computed only when input is requested).
 
 | Benchmark | Median time | Notes |
 | --- | --- | --- |

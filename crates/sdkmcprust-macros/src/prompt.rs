@@ -138,7 +138,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
 
         impl #krate::Prompt for #fn_ident {
             fn definition() -> #krate::PromptDef {
-                #[allow(unused_variables, clippy::needless_pass_by_value)]
+                #[allow(unused_variables, non_snake_case, clippy::needless_pass_by_value)]
                 fn __get(
                     __args: &#krate::PromptArguments,
                     __ctx: #krate::Ctx,

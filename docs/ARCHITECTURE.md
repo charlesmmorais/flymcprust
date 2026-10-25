@@ -134,7 +134,7 @@ crates/
   sdkmcprust-spec/     Generated protocol types, one module per revision.
   sdkmcprust-core/     Runtime: JSON-RPC, limits, routing, registry,
                        extractors, errors, tower::Service, transports.
-  sdkmcprust-macros/   The #[tool] procedural macro.
+  sdkmcprust-macros/   The #[tool], #[resource] and #[prompt] macros.
   sdkmcprust/          Facade crate that re-exports the public API.
 xtask/                 Spec fetching and code generation.
 examples/calculadora/  Example server.

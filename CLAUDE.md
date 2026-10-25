@@ -25,10 +25,11 @@ servers. Read `docs/ARCHITECTURE.md` before making design changes.
 | --- | --- |
 | `crates/sdkmcprust-spec` | Generated protocol types (one module per revision) |
 | `crates/sdkmcprust-core` | Runtime and transports (features: `stdio`, `http`, `test-client`) |
-| `crates/sdkmcprust-macros` | `#[tool]` macro |
+| `crates/sdkmcprust-macros` | `#[tool]`, `#[resource]` and `#[prompt]` macros |
 | `crates/sdkmcprust` | Facade crate; the only crate users depend on |
 | `xtask` | `cargo xtask fetch-spec <rev>` and `cargo xtask codegen [--check]` |
 | `examples/calculadora` | Example server |
+| `examples/conformance-server` | Fixtures for the official conformance suite (`conformance-baseline.yml`) |
 | `fuzz` | cargo-fuzz targets (not a workspace member; needs nightly) |
 
 ## Rules (non-negotiable)

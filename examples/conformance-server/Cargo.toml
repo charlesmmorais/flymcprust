@@ -8,7 +8,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
+schemars.workspace = true
 sdkmcprust = { workspace = true, features = ["http"] }
+serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 

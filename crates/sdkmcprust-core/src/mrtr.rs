@@ -582,7 +582,10 @@ mod tests {
             .args_digest()
         };
         assert_eq!(digest(r#"{"a":1}"#), digest(r#"{ "a" : 1 }"#));
-        assert_eq!(digest(r#"{"a":1,"b":{"y":2,"x":1}}"#), digest(r#"{"b":{"x":1,"y":2},"a":1}"#));
+        assert_eq!(
+            digest(r#"{"a":1,"b":{"y":2,"x":1}}"#),
+            digest(r#"{"b":{"x":1,"y":2},"a":1}"#)
+        );
         assert_ne!(digest(r#"{"a":1}"#), digest(r#"{"a":2}"#));
     }
 
