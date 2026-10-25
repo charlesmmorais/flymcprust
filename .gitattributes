@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.png binary
+# Pinned spec files are verified byte-for-byte against spec/<rev>/LOCK.toml.
+spec/** -text

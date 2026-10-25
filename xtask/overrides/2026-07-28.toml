@@ -1,0 +1,33 @@
+# Generator overrides for MCP spec revision 2026-07-28.
+
+# Catch-all unions that cannot be represented faithfully: the generic `Result`
+# variant matches every result, so these are handled by the runtime instead.
+skip = ["ServerResult", "ClientResult"]
+
+# `_meta` objects keep unknown keys (e.g. OpenTelemetry `traceparent`,
+# extension keys) in a flattened `extra` map.
+open = [
+    "RequestMetaObject",
+    "ResultMetaObject",
+    "NotificationMetaObject",
+    "SubscriptionsListenResultMetaObject",
+]
+
+acronyms = [["JSONRPC", "JsonRpc"], ["JSON", "Json"], ["URL", "Url"]]
+
+[type_map]
+JSONValue = "serde_json::Value"
+JSONObject = "serde_json::Map<String, serde_json::Value>"
+JSONArray = "Vec<serde_json::Value>"
+
+[inline_names]
+"CacheableResult.cacheScope" = "CacheScope"
+"Icon.theme" = "IconTheme"
+"HeaderMismatchError.error" = "HeaderMismatchErrorObject"
+"MissingRequiredClientCapabilityError.error" = "MissingRequiredClientCapabilityErrorObject"
+"MissingRequiredClientCapabilityError.error.data" = "MissingRequiredClientCapabilityErrorData"
+"UnsupportedProtocolVersionError.error" = "UnsupportedProtocolVersionErrorObject"
+"UnsupportedProtocolVersionError.error.data" = "UnsupportedProtocolVersionErrorData"
+
+[marker_names]
+"jsonrpc=2.0" = "JsonRpcVersion"

@@ -10,7 +10,13 @@ keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
 
+[lib]
+# Generated docs quote the specification, including non-Rust code blocks.
+doctest = false
+
 [dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
 
 [lints]
 workspace = true
