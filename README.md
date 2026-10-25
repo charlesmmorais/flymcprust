@@ -147,6 +147,28 @@ async fn deploy(ctx: Ctx, env: String) -> Result<String, ToolError> {
   tools, resources and prompts. `ctx.sample(..)` and `ctx.list_roots(..)`
   exist too, deprecated like the features themselves (SEP-2577).
 
+### Reporting progress
+
+```rust
+#[tool]
+async fn import(ctx: Ctx, files: Vec<String>) -> Result<String, ToolError> {
+    for (i, file) in files.iter().enumerate() {
+        ctx.progress(i as f64, files.len() as f64);
+        load(file).await?;
+    }
+    Ok(format!("imported {} files", files.len()))
+}
+```
+
+- `ctx.progress` never blocks and costs nothing when the client did not ask
+  for progress. With a slow client, only the latest update is kept; it
+  arrives before the result. Values must increase.
+- Over HTTP the response becomes an SSE stream only once there is something
+  to stream; closing it cancels the tool.
+- `ctx.log(level, data)` sends log messages to clients that ask for them. It
+  is deprecated like MCP logging itself (SEP-2577): log to stderr with
+  `tracing` instead.
+
 ## Features
 
 | Feature | Default | Description |
@@ -174,7 +196,7 @@ async fn deploy(ctx: Ctx, env: String) -> Result<String, ToolError> {
 | Prompts (`prompts/list`, `prompts/get`) | ✅ |
 | Completion (`completion/complete`) | ✅ |
 | Multi round-trip requests: elicitation, sampling, roots; signed `requestState` | ✅ |
-| Progress and logging notifications, response streaming | Planned |
+| Progress (`notifications/progress`), logging (`notifications/message`, deprecated), SSE response streaming | ✅ |
 | Subscriptions, Tasks, Apps, OAuth | Planned; the architecture already reserves their place ([ARCHITECTURE](docs/ARCHITECTURE.md) §12) |
 | 2025-11-25 and 2025-06-18 clients: `initialize`, `ping`, signed sessions, `ctx.elicit` as server-to-client requests (stdio and SSE) | ✅ (on by default; `legacy_clients(false)` turns it off) |
 
@@ -187,13 +209,11 @@ server scenario against it. Known gaps are listed in
 other failure or on a stale entry.
 
 Results with `@modelcontextprotocol/conformance@0.2.0-alpha.12` on 2026-10-25:
-**144 checks pass and 3 fail**, with no warnings. The 3 failures need progress
-notifications, logging notifications and response streaming, which are not
-built yet.
+**all 147 checks of the 2026-07-28 suite pass**, with no warnings.
 
 | Scenario | Result |
 | --- | --- |
-| `server-stateless` | 23/25 (the 2 failures need logging and streaming fixtures) |
+| `server-stateless` | 25/25 |
 | `tools-list`, `tools-call-{simple-text,image,audio,embedded-resource,mixed-content,error}` | all pass |
 | `resources-{list,read-text,read-binary,templates-read}`, `sep-2164-resource-not-found` | all pass |
 | `prompts-{list,get-simple,get-with-args,get-embedded-resource,get-with-image}` | all pass |
@@ -204,14 +224,14 @@ built yet.
 | `http-header-validation` | 14/14 |
 | `http-custom-header-server-validation` | 10/10 |
 | `dns-rebinding-protection` | 2/2 |
-| `tools-call-with-progress` | 1/2 (progress notifications) |
+| `tools-call-with-progress` | 2/2 |
 
-The 2025-11-25 suite (older clients) passes **73 checks with 5 failures**, all
-in features not built yet: logging and progress notifications, and resource
-subscriptions ([`conformance-baseline-2025-11-25.yml`](conformance-baseline-2025-11-25.yml)).
-Initialization, sessions, ping, tools, resources, prompts, completion,
-elicitation and sampling (as server-to-client requests) and DNS-rebinding
-protection all pass.
+The 2025-11-25 suite (older clients) passes **76 of 78 checks**; the 2
+failures are resource subscriptions, which are not planned
+([`conformance-baseline-2025-11-25.yml`](conformance-baseline-2025-11-25.yml)).
+Initialization, sessions, ping, logging, progress, tools, resources, prompts,
+completion, elicitation and sampling (as server-to-client requests) and
+DNS-rebinding protection all pass.
 
 To reproduce locally, run `cargo run -p conformance-server`, then:
 

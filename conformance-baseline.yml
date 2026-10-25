@@ -1,12 +1,5 @@
-# Known failures of the official MCP conformance suite
-# (@modelcontextprotocol/conformance, 2026-07-28 server scenarios) against
-# examples/conformance-server. Every entry is a feature the SDK does not
-# implement yet. CI fails on any other failure, and also when an entry starts
-# passing (stale baseline), so remove entries as features land.
-server:
-  # Diagnostic fixtures that need response streaming and logging
-  # notifications (`notifications/message` gated by `_meta.../logLevel`).
-  - server-stateless:sep-2575-http-server-no-independent-requests-on-stream
-  - server-stateless:sep-2575-server-no-log-without-loglevel
-  # Progress notifications.
-  - tools-call-with-progress
+# Known failures of the official MCP conformance suite (2026-07-28 server
+# scenarios) against examples/conformance-server. Empty: every scenario
+# passes. CI fails on any failure; when a feature is knowingly unsupported,
+# list it here with a comment.
+server: []

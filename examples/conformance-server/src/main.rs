@@ -6,9 +6,8 @@
 //! conformance-server [ADDR]      # default 127.0.0.1:3000, endpoint /mcp
 //! ```
 //!
-//! Fixtures that need features the SDK does not have yet (progress and
-//! logging notifications, response streaming) are not implemented; they are
-//! listed in `conformance-baseline.yml`.
+//! Fixtures that need features the SDK does not have (resource
+//! subscriptions) are listed in the conformance baselines.
 #![forbid(unsafe_code)]
 // A CLI fixture: status messages go to stderr.
 #![allow(clippy::print_stderr)]
@@ -163,7 +162,7 @@ async fn main() -> ExitCode {
                 .tool::<test_missing_capability>()
                 .tool::<test_custom_header>()
                 .tool_def(schema_tool);
-            fixtures::register_legacy(fixtures::register(builder))
+            fixtures::register_notifications(fixtures::register_legacy(fixtures::register(builder)))
                 .build()
                 .map_err(|e| e.to_string())
         });

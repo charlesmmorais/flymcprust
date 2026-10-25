@@ -375,3 +375,58 @@ pub(crate) fn register_legacy(builder: ServerBuilder) -> ServerBuilder {
         .tool::<test_elicitation_sep1034_defaults>()
         .tool::<test_elicitation_sep1330_enums>()
 }
+
+// ---------------------------------------------------------------------------
+// Progress and logging.
+
+/// Reports progress 0, 50 and 100 out of 100.
+#[tool]
+async fn test_tool_with_progress(ctx: Ctx) -> String {
+    for (i, step) in [0.0, 50.0, 100.0].into_iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        ctx.progress(step, 100.0);
+    }
+    "Progress reported".to_owned()
+}
+
+/// Sends three log messages while it runs.
+#[tool]
+async fn test_tool_with_logging(ctx: Ctx) -> String {
+    use sdkmcprust::spec::LoggingLevel;
+    ctx.log(LoggingLevel::Info, "Tool execution started");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    ctx.log(LoggingLevel::Info, "Tool processing data");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    ctx.log(LoggingLevel::Info, "Tool execution completed");
+    "Logging completed".to_owned()
+}
+
+/// Logs (only delivered when the request sets a log level).
+#[tool]
+async fn test_logging_tool(ctx: Ctx) -> String {
+    ctx.log(
+        sdkmcprust::spec::LoggingLevel::Info,
+        "diagnostic log message",
+    );
+    "logged".to_owned()
+}
+
+/// Asks for input; on 2026-07-28 that is an input-required result, never a
+/// request on the response stream.
+#[tool]
+async fn test_streaming_elicitation(ctx: Ctx) -> Result<String, ToolError> {
+    ctx.progress(1.0, 2.0);
+    let user: UserName = ctx.elicit("user_name", "What is your name?").await?;
+    Ok(format!("Hello, {}!", user.name))
+}
+
+/// Registers the progress and logging fixtures.
+pub(crate) fn register_notifications(builder: ServerBuilder) -> ServerBuilder {
+    builder
+        .tool::<test_tool_with_progress>()
+        .tool::<test_tool_with_logging>()
+        .tool::<test_logging_tool>()
+        .tool::<test_streaming_elicitation>()
+}

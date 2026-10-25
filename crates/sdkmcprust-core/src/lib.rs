@@ -19,6 +19,7 @@ mod legacy;
 mod limits;
 mod mirror;
 mod mrtr;
+mod notify;
 mod prompt;
 mod resource;
 pub mod security;

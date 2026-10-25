@@ -25,6 +25,7 @@ use crate::legacy::{LegacyConfig, LegacySession};
 use crate::limits::Limits;
 use crate::mirror::{self, MirroredParam};
 use crate::mrtr::{Args, MIN_REQUEST_STATE_KEY_BYTES, Round, RoundKey, StateCodec};
+use crate::notify::{Notifier, NotifyChannel};
 use crate::prompt::{GetFn, Prompt, PromptArguments, PromptDef};
 use crate::resource::{ReadFn, Resource, ResourceDef, ResourceKind};
 use crate::spec::{self, CacheScope, RequestId, methods};
@@ -497,6 +498,7 @@ impl ServerBuilder {
             || prompts.registry.iter().any(|p| !p.completers.is_empty());
         let has_resources = !resources.statics.is_empty() || !resources.templates.is_empty();
         let has_prompts = !prompts.registry.is_empty();
+        #[allow(deprecated)] // `logging`: deprecated (SEP-2577) but still specified.
         let capabilities = spec::ServerCapabilities {
             tools: Some(spec::ServerCapabilitiesTools { list_changed: None }),
             resources: has_resources.then_some(spec::ServerCapabilitiesResources {
@@ -505,6 +507,8 @@ impl ServerBuilder {
             }),
             prompts: has_prompts.then_some(spec::ServerCapabilitiesPrompts { list_changed: None }),
             completions: has_completions.then(Map::new),
+            // Log messages are sent only to clients that ask for them.
+            logging: Some(Map::new()),
             extensions: (!extensions.is_empty()).then_some(extensions),
             ..spec::ServerCapabilities::default()
         };
@@ -1138,6 +1142,7 @@ impl Server {
         Ok(Some(body.to_owned()))
     }
 
+    #[allow(deprecated)] // `log_level`: deprecated (SEP-2577) but still specified.
     fn validate_meta(
         &self,
         meta: Option<&RawValue>,
@@ -1145,7 +1150,12 @@ impl Server {
     ) -> Result<RequestMeta, McpError> {
         // Legacy clients declared everything at `initialize`.
         if let Some(session) = transport.get::<LegacySession>() {
-            return Ok(session.request_meta());
+            let mut request_meta = session.request_meta();
+            // Legacy `_meta` may carry a progress token.
+            request_meta.progress_token = meta
+                .and_then(|raw| serde_json::from_str::<LegacyMeta>(raw.get()).ok())
+                .and_then(|m| m.progress_token);
+            return Ok(request_meta);
         }
         let missing = || {
             McpError::invalid_params(
@@ -1175,6 +1185,7 @@ impl Server {
             client_capabilities: meta.client_capabilities,
             client_info: meta.client_info,
             progress_token: meta.progress_token,
+            log_level: meta.log_level,
         })
     }
 
@@ -1186,6 +1197,14 @@ impl Server {
         transport: TransportContext,
         round: &Arc<Round>,
     ) -> Ctx {
+        // Only when the client asked for notifications and the transport
+        // can deliver them.
+        let notifier = transport
+            .get::<NotifyChannel>()
+            .and_then(|channel| {
+                Notifier::new(&channel, meta.progress_token.clone(), meta.log_level)
+            })
+            .map(Arc::new);
         Ctx::new(
             id,
             meta,
@@ -1193,6 +1212,7 @@ impl Server {
             transport,
             Arc::clone(&self.inner.state),
             Some(Arc::clone(round)),
+            notifier,
         )
     }
 
@@ -1285,6 +1305,7 @@ impl Server {
             .find_tool(name)
             .ok_or_else(|| McpError::unknown_tool(name))?;
 
+        let notifier = ctx.notifier_handle();
         let outcome = match (tool.call)(arguments, ctx) {
             Err(error) => Err(error),
             Ok(future) => match self.run(future, cancellation).await? {
@@ -1292,6 +1313,9 @@ impl Server {
                 Some(outcome) => outcome,
             },
         };
+        if let Some(notifier) = notifier {
+            notifier.finish().await;
+        }
 
         let mut result = match outcome {
             Ok(ToolOutput::Complete(result)) => result,
@@ -1337,6 +1361,7 @@ impl Server {
         let (read, vars, ttl_ms, cache_scope) = self
             .find_resource(uri)
             .ok_or_else(|| McpError::resource_not_found(uri))?;
+        let notifier = ctx.notifier_handle();
         let outcome = match read(uri, &vars, ctx) {
             Err(error) => Err(error),
             Ok(future) => match self.run(future, cancellation).await? {
@@ -1344,6 +1369,9 @@ impl Server {
                 Some(outcome) => outcome,
             },
         };
+        if let Some(notifier) = notifier {
+            notifier.finish().await;
+        }
         let contents = outcome.map_err(|e| HandlerError::from_tool(e, "resource", Some(uri)))?;
         let mut result =
             spec::ReadResourceResult::new(cache_scope, contents, COMPLETE.to_owned(), ttl_ms);
@@ -1372,6 +1400,7 @@ impl Server {
         let prompt = self
             .find_prompt(name)
             .ok_or_else(|| McpError::unknown_prompt(name))?;
+        let notifier = ctx.notifier_handle();
         let outcome = match (prompt.get)(arguments, ctx) {
             Err(error) => Err(error),
             Ok(future) => match self.run(future, cancellation).await? {
@@ -1379,6 +1408,9 @@ impl Server {
                 Some(outcome) => outcome,
             },
         };
+        if let Some(notifier) = notifier {
+            notifier.finish().await;
+        }
         let mut result = outcome.map_err(|e| HandlerError::from_tool(e, &prompt.name, None))?;
         result.result_type = COMPLETE.to_owned();
         if result.description.is_none() {
@@ -1448,6 +1480,13 @@ impl tower_service::Service<McpRequest> for Server {
         let server = self.clone();
         Box::pin(async move { Ok(server.handle(request).await) })
     }
+}
+
+/// The legacy `_meta` fields the adapter uses.
+#[derive(Deserialize)]
+struct LegacyMeta {
+    #[serde(rename = "progressToken", default)]
+    progress_token: Option<spec::ProgressToken>,
 }
 
 #[derive(Deserialize)]

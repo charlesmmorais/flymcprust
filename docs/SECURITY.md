@@ -37,6 +37,7 @@ host.
 | Path traversal through resource URIs | Decoded `{var}`, `{/var}` and query values never contain `/`, `\` or control characters; `security::confine_path` confines `{+path}` values (and any file argument) to a root, after resolving symbolic links. |
 | Forged legacy sessions or answers (2025-11-25 clients) | `MCP-Session-Id` tokens are HMAC-signed (separate signing context from `requestState`), expire after 24 h and carry a random nonce, so they are unique and cannot be forged or altered; invalid ones get `404`. Server-to-client requests use random 128-bit ids bound to the session that caused them, so another client cannot answer them. |
 | Forged or replayed `requestState` (MRTR) | HMAC-SHA256 with a 256-bit random key (or a configured one of at least 32 bytes), verified in constant time before parsing; bound to method, target, argument digest and expiry (10 min); only answers the handler actually read are carried forward. |
+| Flooding a slow client with notifications | Notifications never block handlers: log messages beyond a 32-message buffer are dropped and progress keeps only the latest value; nothing is sent after the response. |
 | Requests for input the client cannot serve | Client capabilities checked before any input request (`-32021`). |
 | Supply chain | `cargo-deny` (licenses, advisories, bans, sources) and `cargo-audit` in CI; protocol schema pinned by SHA-256. |
 
@@ -58,7 +59,9 @@ The SDK cannot enforce these; applications must:
    handler timeout.
 6. **Treat answers as untrusted.** Elicitation, sampling and roots answers
    come from the client.
-7. **Mind what you log.** Logs may contain client input.
+7. **Mind what you log.** Logs may contain client input. What you pass to
+   `ctx.log` and progress messages is shown to the client: never include
+   secrets or internal details.
 
 ## 4. Known limitations
 

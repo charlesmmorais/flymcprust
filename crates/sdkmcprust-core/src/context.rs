@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::mrtr::Round;
+use crate::notify::Notifier;
 use crate::spec::{self, RequestId};
 
 /// A small type map: at most one value per type.
@@ -76,6 +77,9 @@ pub(crate) struct RequestMeta {
     pub(crate) client_capabilities: spec::ClientCapabilities,
     pub(crate) client_info: Option<spec::Implementation>,
     pub(crate) progress_token: Option<spec::ProgressToken>,
+    /// Minimum level of log messages the client asked for.
+    #[allow(deprecated)]
+    pub(crate) log_level: Option<spec::LoggingLevel>,
 }
 
 /// Context of the request being handled. Declare a `Ctx` parameter in a tool
@@ -94,6 +98,7 @@ struct CtxInner {
     transport: TransportContext,
     state: Arc<TypeMap>,
     round: Option<Arc<Round>>,
+    notifier: Option<Arc<Notifier>>,
 }
 
 impl Ctx {
@@ -104,6 +109,7 @@ impl Ctx {
         transport: TransportContext,
         state: Arc<TypeMap>,
         round: Option<Arc<Round>>,
+        notifier: Option<Arc<Notifier>>,
     ) -> Self {
         Self {
             inner: Arc::new(CtxInner {
@@ -113,8 +119,18 @@ impl Ctx {
                 transport,
                 state,
                 round,
+                notifier,
             }),
         }
+    }
+
+    /// Notifications of this request, when the client asked for them.
+    pub(crate) fn notifier(&self) -> Option<&Notifier> {
+        self.inner.notifier.as_deref()
+    }
+
+    pub(crate) fn notifier_handle(&self) -> Option<Arc<Notifier>> {
+        self.inner.notifier.clone()
     }
 
     /// MRTR data, for `tools/call`, `resources/read` and `prompts/get`.

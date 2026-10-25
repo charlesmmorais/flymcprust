@@ -16,7 +16,8 @@ servers and competes on simplicity, efficiency and security.
 | Security review | 9 findings fixed with regression tests ([SECURITY.md](SECURITY.md)) |
 | 3 | Comparative benchmarks against `rmcp` and the official Python SDK ([bench/results/RESULTS.md](../bench/results/RESULTS.md)) |
 | DX | 5-minute quickstart, fix-it hints in errors |
-| 4 | Clients of 2025-11-25 and 2025-06-18: `initialize`, signed sessions, input requests as server-to-client requests; 73/78 checks of the 2025-11-25 conformance suite |
+| 4 | Clients of 2025-11-25 and 2025-06-18: `initialize`, signed sessions, input requests as server-to-client requests |
+| 5 | Progress (`ctx.progress`), logging (`ctx.log`, deprecated), SSE response streaming; 147/147 checks of the 2026-07-28 conformance suite, 76/78 of 2025-11-25 |
 
 ## Next, in order
 
@@ -53,7 +54,7 @@ feature. Plan: an adapter at the transport edge that answers `initialize`
 and translates legacy requests onto the same stateless core, so handlers and
 macros do not change.
 
-### 5. Progress, logging and response streaming
+### 5. Progress, logging and response streaming (done)
 
 SSE responses for `notifications/progress` and `notifications/message`
 (gated by `_meta.../logLevel`), with `ctx.progress(..)` and `ctx.log(..)`.

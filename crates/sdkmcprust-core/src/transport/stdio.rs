@@ -31,6 +31,7 @@ use crate::context::TransportContext;
 use crate::error::McpError;
 use crate::jsonrpc::{self, Message, Rejection, Response};
 use crate::legacy::{ChannelPeer, LegacySession, PendingRequests};
+use crate::notify::NotifyChannel;
 use crate::server::{McpRequest, Server};
 use crate::spec::{RequestId, methods};
 
@@ -57,6 +58,28 @@ impl Server {
         }
         serve_io(self, tokio::io::stdin(), tokio::io::stdout()).await
     }
+}
+
+/// Applies a legacy `logging/setLevel` to the connection's session.
+#[allow(deprecated)] // Logging is deprecated (SEP-2577) but legacy clients use it.
+fn set_log_level(
+    legacy: &Mutex<Option<LegacySession>>,
+    params: Option<&serde_json::value::RawValue>,
+) -> Result<(), McpError> {
+    #[derive(Deserialize)]
+    struct Params {
+        level: crate::spec::LoggingLevel,
+    }
+    let params: Params = serde_json::from_str(params.map_or("{}", |p| p.get()))
+        .map_err(|_| McpError::invalid_params("Invalid log level"))?;
+    if let Some(session) = legacy
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
+        session.log_level = Some(params.level);
+    }
+    Ok(())
 }
 
 /// Tells someone who started the server in a terminal what is going on.
@@ -182,6 +205,28 @@ where
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
 
+        // Legacy log level: kept for the rest of the connection.
+        if request.method == "logging/setLevel" && session.is_some() {
+            let response = match set_log_level(&legacy, request.params.as_deref()) {
+                Ok(()) => serde_json::value::to_raw_value(&serde_json::json!({}))
+                    .map(|result| Response::Result {
+                        id: request.id.clone(),
+                        result,
+                    })
+                    .unwrap_or_else(|_| {
+                        Response::error(Some(request.id.clone()), McpError::internal())
+                    }),
+                Err(error) => Response::error(Some(request.id), error),
+            };
+            if tx.send(response.to_vec()).await.is_err() {
+                break Ok(());
+            }
+            continue;
+        }
+        // Progress and log messages go on the connection, before the response.
+        let mut transport = TransportContext::default();
+        transport.insert(NotifyChannel(tx.clone()));
+
         let token = CancellationToken::new();
         let duplicate = match lock(&in_flight).entry(request.id.clone()) {
             std::collections::hash_map::Entry::Occupied(_) => true,
@@ -214,14 +259,14 @@ where
             let response = match session {
                 Some(session) => {
                     server
-                        .handle_legacy(request, &session, TransportContext::default(), token, &peer)
+                        .handle_legacy(request, &session, transport, token, &peer)
                         .await
                 }
                 None => {
                     server
                         .handle(McpRequest {
                             message: Message::Request(request),
-                            transport: TransportContext::default(),
+                            transport,
                             cancellation: token,
                         })
                         .await

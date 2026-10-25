@@ -19,6 +19,8 @@
 
 // The transports use most of this module.
 #![cfg_attr(not(all(feature = "stdio", feature = "http")), allow(dead_code))]
+// Legacy clients still use logging, deprecated in 2026-07-28 (SEP-2577).
+#![allow(deprecated)]
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -70,6 +72,11 @@ pub struct LegacySession {
     /// still get different session ids.
     #[serde(rename = "n", default)]
     pub(crate) nonce: String,
+    /// Minimum log level set with `logging/setLevel` (stdio only; HTTP
+    /// sessions are immutable tokens). `None`: every level.
+    #[allow(deprecated)]
+    #[serde(rename = "l", default, skip_serializing_if = "Option::is_none")]
+    pub(crate) log_level: Option<spec::LoggingLevel>,
 }
 
 impl LegacySession {
@@ -99,6 +106,8 @@ impl LegacySession {
                 .clone()
                 .and_then(|info| serde_json::from_value(info).ok()),
             progress_token: None,
+            #[allow(deprecated)]
+            log_level: Some(self.log_level.unwrap_or(spec::LoggingLevel::Debug)),
         }
     }
 }
@@ -312,6 +321,7 @@ impl Server {
             client_info: params.client_info,
             expires: now_secs().saturating_add(config.session_ttl.as_secs()),
             nonce: nonce.iter().map(|b| format!("{b:02x}")).collect(),
+            log_level: None,
         };
         Ok((to_raw(&Value::Object(result))?, session))
     }
@@ -346,7 +356,10 @@ impl Server {
                     Err(error) => Response::error(Some(id), error),
                 });
             }
-            "ping" => {
+            // Legacy log level: kept per connection on stdio (which answers it
+            // before reaching here); HTTP sessions cannot change, so the
+            // request is acknowledged and every level stays enabled.
+            "logging/setLevel" | "ping" => {
                 return Some(match to_raw(&Value::Object(Map::new())) {
                     Ok(result) => Response::Result { id, result },
                     Err(error) => Response::error(Some(id), error),

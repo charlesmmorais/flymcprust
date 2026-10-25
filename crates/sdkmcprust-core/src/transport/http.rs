@@ -49,7 +49,7 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 use tokio::net::TcpListener;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::context::TransportContext;
 use crate::error::{ErrorKind, McpError};
@@ -57,6 +57,7 @@ use crate::hints::{self, Once};
 use crate::jsonrpc::{self, Message, Rejection, Response as RpcResponse};
 use crate::legacy::{self, ChannelPeer, LegacySession, PendingRequests};
 use crate::mirror::ParamKind;
+use crate::notify::NotifyChannel;
 use crate::server::{McpRequest, Server};
 use crate::spec::{RequestId, methods};
 
@@ -513,20 +514,47 @@ impl StreamableHttpService {
         // A legacy client's `initialize` carries none of the modern headers;
         // let the server answer it with an error naming the supported
         // versions (the spec recommends that diagnostic for legacy clients).
+        let mut wants_notifications = false;
         if let Message::Request(request) = &message
             && request.method != "initialize"
-            && let Err(error) = validate_headers(&self.server, &parts.headers, request)
         {
-            return rpc_error(
-                StatusCode::BAD_REQUEST,
-                Some(request.id.clone()),
-                &error,
-                cors.as_ref(),
-            );
+            match validate_headers(&self.server, &parts.headers, request) {
+                Ok(wants) => wants_notifications = wants,
+                Err(error) => {
+                    return rpc_error(
+                        StatusCode::BAD_REQUEST,
+                        Some(request.id.clone()),
+                        &error,
+                        cors.as_ref(),
+                    );
+                }
+            }
         }
 
         let mut transport = TransportContext::new();
         transport.insert(parts);
+        if wants_notifications {
+            // The client asked for progress or log messages: they can only
+            // travel on an SSE response, which closing cancels the request.
+            let cancellation = CancellationToken::new();
+            let guard = cancellation.clone().drop_guard();
+            let server = self.server.clone();
+            return self
+                .respond_streaming(permit, cors, Some(guard), move |out| {
+                    let mut transport = transport;
+                    transport.insert(NotifyChannel(out));
+                    Box::pin(async move {
+                        server
+                            .handle(McpRequest {
+                                message,
+                                transport,
+                                cancellation,
+                            })
+                            .await
+                    })
+                })
+                .await;
+        }
         let response = self
             .server
             .handle(McpRequest {
@@ -628,31 +656,58 @@ impl StreamableHttpService {
             // Notifications (`initialized`, `cancelled`) need no answer.
             return plain(StatusCode::ACCEPTED, cors.as_ref());
         };
-        let (out, mut outgoing) = mpsc::channel::<Vec<u8>>(8);
-        let (done, mut finished) = oneshot::channel::<Option<RpcResponse>>();
-        let peer = ChannelPeer {
-            pending: Arc::clone(&self.pending),
-            owner,
-            out,
-            timeout: self.server.limits().tool_timeout,
-        };
+        let pending = Arc::clone(&self.pending);
+        let timeout = self.server.limits().tool_timeout;
         let server = self.server.clone();
+        // 2025-11-25: a disconnection is not a cancellation.
+        self.respond_streaming(permit, cors, None, move |out| {
+            let mut transport = transport;
+            transport.insert(NotifyChannel(out.clone()));
+            let peer = ChannelPeer {
+                pending,
+                owner,
+                out,
+                timeout,
+            };
+            Box::pin(async move {
+                server
+                    .handle_legacy(
+                        request,
+                        &session,
+                        transport,
+                        CancellationToken::new(),
+                        &peer,
+                    )
+                    .await
+            })
+        })
+        .await
+    }
+
+    /// Runs a request whose handler may emit messages before its response
+    /// (notifications, or requests to a legacy client). The response is
+    /// plain JSON if the handler finishes first, and an SSE stream from the
+    /// first message on. `cancel` is cancelled when the response is dropped
+    /// (the client closed the stream).
+    async fn respond_streaming<F>(
+        &self,
+        permit: OwnedSemaphorePermit,
+        cors: Option<HeaderValue>,
+        cancel: Option<DropGuard>,
+        run: F,
+    ) -> Response<HttpBody>
+    where
+        F: FnOnce(
+            mpsc::Sender<Vec<u8>>,
+        ) -> Pin<Box<dyn Future<Output = Option<RpcResponse>> + Send>>,
+    {
+        let (out, mut outgoing) = mpsc::channel::<Vec<u8>>(STREAM_BUFFER);
+        let (done, mut finished) = oneshot::channel::<Option<RpcResponse>>();
+        let task = run(out);
         tokio::spawn(async move {
-            let response = server
-                .handle_legacy(
-                    request,
-                    &session,
-                    transport,
-                    CancellationToken::new(),
-                    &peer,
-                )
-                .await;
-            drop(peer);
-            let _ = done.send(response);
+            let _ = done.send(task.await);
         });
 
-        // Wait for the result, or for the first request to the client. The
-        // request channel closes when the handler finishes without asking.
         let reply = |response: Option<RpcResponse>| match response {
             None => plain(StatusCode::ACCEPTED, cors.as_ref()),
             Some(response) => {
@@ -669,21 +724,40 @@ impl StreamableHttpService {
             return reply(finished.await.ok().flatten());
         };
         let state = SseState {
-            first: Some(first),
+            queue: std::collections::VecDeque::from([first]),
             outgoing,
             finished: Some(finished),
             _permit: permit,
+            _cancel: cancel,
         };
         let stream = futures_util::stream::unfold(state, |mut state| async move {
-            if let Some(message) = state.first.take() {
-                return Some((Ok(sse_event(&message)), state));
+            loop {
+                if let Some(message) = state.queue.pop_front() {
+                    return Some((Ok(sse_event(&message)), state));
+                }
+                let finished = state.finished.as_mut()?;
+                tokio::select! {
+                    biased;
+                    message = state.outgoing.recv() => match message {
+                        Some(message) => state.queue.push_back(message),
+                        None => {
+                            // Every sender is gone: the response follows.
+                            let response = state.finished.take()?.await.ok().flatten()?;
+                            state.queue.push_back(response.to_vec());
+                        }
+                    },
+                    response = finished => {
+                        // Messages sent before the response come first.
+                        state.finished = None;
+                        while let Ok(message) = state.outgoing.try_recv() {
+                            state.queue.push_back(message);
+                        }
+                        if let Ok(Some(response)) = response {
+                            state.queue.push_back(response.to_vec());
+                        }
+                    }
+                }
             }
-            if let Some(message) = state.outgoing.recv().await {
-                return Some((Ok(sse_event(&message)), state));
-            }
-            // The handler finished: send its response and end the stream.
-            let response = state.finished.take()?.await.ok().flatten()?;
-            Some((Ok(sse_event(&response.to_vec())), state))
         });
         let body = http_body_util::StreamBody::new(stream);
         let mut response = Response::new(HttpBody(BodyKind::Stream(Box::pin(body))));
@@ -693,6 +767,8 @@ impl StreamableHttpService {
             HeaderValue::from_static("text/event-stream"),
         );
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        // Reverse proxies must not buffer the stream (spec recommendation).
+        headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
         headers.insert(
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
@@ -715,13 +791,20 @@ fn declares_modern_meta(message: &Message) -> bool {
     })
 }
 
-/// State of a legacy SSE response.
+/// Messages buffered between a handler and its SSE response.
+const STREAM_BUFFER: usize = 32;
+
+/// State of an SSE response.
 struct SseState {
-    first: Option<Vec<u8>>,
+    /// Messages ready to send, in order.
+    queue: std::collections::VecDeque<Vec<u8>>,
     outgoing: mpsc::Receiver<Vec<u8>>,
+    /// The handler's response; `None` once received.
     finished: Option<oneshot::Receiver<Option<RpcResponse>>>,
     /// Counts against the in-flight limit until the stream ends.
     _permit: OwnedSemaphorePermit,
+    /// Cancels the request if the stream is dropped (client disconnect).
+    _cancel: Option<DropGuard>,
 }
 
 fn sse_event(message: &[u8]) -> http_body::Frame<Bytes> {
@@ -915,14 +998,20 @@ struct PeekParams<'a> {
 struct PeekMeta<'a> {
     #[serde(rename = "io.modelcontextprotocol/protocolVersion", borrow, default)]
     protocol_version: Option<Cow<'a, str>>,
+    #[serde(rename = "progressToken", borrow, default)]
+    progress_token: Option<&'a RawValue>,
+    #[serde(rename = "io.modelcontextprotocol/logLevel", borrow, default)]
+    log_level: Option<&'a RawValue>,
 }
 
-/// Checks the mirrored request headers against the body (SEP-2243).
+/// Checks the mirrored request headers against the body (SEP-2243). Returns
+/// whether the request asks for notifications (a progress token or a log
+/// level), which need an SSE response.
 fn validate_headers(
     server: &Server,
     headers: &HeaderMap,
     request: &jsonrpc::Request,
-) -> Result<(), McpError> {
+) -> Result<bool, McpError> {
     let version = single_header(headers, MCP_PROTOCOL_VERSION)?
         .ok_or_else(|| McpError::header_mismatch("Missing MCP-Protocol-Version header"))?;
     let method = single_header(headers, MCP_METHOD)?
@@ -937,8 +1026,12 @@ fn validate_headers(
     let Ok(params) = serde_json::from_str::<PeekParams<'_>>(
         request.params.as_deref().map_or("{}", RawValue::get),
     ) else {
-        return Ok(());
+        return Ok(false);
     };
+    let wants_notifications = params
+        .meta
+        .as_ref()
+        .is_some_and(|m| m.progress_token.is_some() || m.log_level.is_some());
 
     if let Some(body_version) = params
         .meta
@@ -971,7 +1064,7 @@ fn validate_headers(
     {
         validate_param_headers(server, headers, name, params.arguments)?;
     }
-    Ok(())
+    Ok(wants_notifications)
 }
 
 fn validate_param_headers(

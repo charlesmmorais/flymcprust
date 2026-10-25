@@ -341,10 +341,13 @@ Request handling, in order:
    | `-32602` for missing `_meta`, `-32020`, `-32021`, `-32022` | `400` |
    | Any other response | `200` |
 
-7. Phase 1 responds with `application/json`. The SSE response path (for
-   progress notifications) is designed in: when the response stream is
-   dropped, the handler future is dropped too, which is the cancellation
-   semantics the spec requires.
+7. Responses are `application/json` unless the handler emits messages
+   first: a request that asks for notifications (`progressToken` or
+   `io.modelcontextprotocol/logLevel` in `_meta`) runs in a task whose
+   response becomes an SSE stream at the first notification
+   (`X-Accel-Buffering: no`), and stays JSON if none comes. Closing that
+   stream cancels the request, as the spec requires. Requests that ask for
+   nothing take the direct path, unchanged.
 
 ### 7.3 Legacy clients (2025-11-25, 2025-06-18)
 
@@ -514,6 +517,7 @@ exception to the safety rules is needed.
 | 2026-10-25 | MRTR uses the *replay* model (chosen by the owner): `ctx.elicit(key, msg).await?` returns the answer if the client sent it (this round or an earlier one), otherwise records the request and ends the round with an internal "input required" error that the runtime turns into `InputRequiredResult`. Handlers rerun from the start each round, so code before an input call must be idempotent. Questions awaited together (`tokio::join!`) share a round. This replaces the planned `ToolOutput::InputRequired`: an error kind propagates with `?` through any return type. |
 | 2026-10-25 | `requestState` is always emitted and carries the answers of earlier rounds, so the server stays stateless. It is HMAC-SHA256 signed (`hmac` + `sha2`, chosen by the owner) and bound to the method, the target (tool/prompt name or resource URI), a digest of the arguments (whitespace- and key-order-insensitive) and an expiry (default 10 min). Failed verification is `-32602`. The key is random per process unless `request_state_key` (at least 32 bytes) is set, which multi-instance deployments need. Binding to the authenticated principal (a spec SHOULD) waits for OAuth. |
 | 2026-10-25 | Answers in the current round's `inputResponses` need no state: they are client input like arguments. Unknown keys are ignored; a missing answer is asked again; an answer that does not decode is `-32602`. Input requests check the client capabilities first (`-32021` otherwise). Sampling and roots helpers are `#[deprecated]` like the features (SEP-2577). |
+| 2026-10-25 | Phase 5 decisions (chosen by the owner): `ctx.progress(done, total)` never blocks; with a slow reader the latest update replaces older pending ones and is flushed before the response; non-increasing values are ignored (spec MUST). `ctx.log` exists for compatibility and is `#[deprecated]` like MCP logging (SEP-2577); no bridge from `tracing`, which would push a deprecated feature and risk leaking internal details. A notifier exists only when the client asked for notifications and the transport can deliver them, so other requests pay nothing; nothing is sent after the response. The `logging` capability is always declared. Legacy clients get every level until `logging/setLevel` (stdio keeps it per connection; HTTP sessions are immutable tokens, so the call is acknowledged without effect). |
 | 2026-10-25 | Phase 4 decisions (chosen by the owner): legacy clients are on by default; versions 2025-11-25 and 2025-06-18; HTTP sessions are signed tokens rather than server-side state, so the server stays stateless and has no session table to exhaust. Types of 2025-11-25 are not generated: the adapter only builds `InitializeResult` and strips fields, checked by the 2025-11-25 conformance suite. |
 | 2026-10-25 | Developer-facing errors say how to fix the problem. `BuildError` has `help()` and a `Debug` that prints the message plus `= help:` (what `fn main() -> Result` shows). Runtime rejections a client can trigger (host, origin, size, timeouts, busy, legacy `initialize`, invalid `requestState`, missing capability) log their fix at `WARN` once, then `DEBUG`; client values in log lines are truncated and escaped. Clients still get only short, generic errors. `logging::init()` (feature `logging`) makes these visible with one call, and `serve_stdio` explains itself when started from a terminal. |
 | 2026-10-25 | Duplicate `Host` headers are rejected (RFC 9112): only the first was checked, while an intermediary might route on another. |
