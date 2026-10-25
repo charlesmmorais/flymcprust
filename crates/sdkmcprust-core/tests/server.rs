@@ -402,6 +402,52 @@ async fn malformed_messages_get_errors_without_id() {
     assert!(v.get("id").is_none());
 }
 
+fn needs_sampling(_: Option<&RawValue>, ctx: Ctx) -> Result<ToolFuture, ToolError> {
+    #[allow(deprecated)] // Sampling is deprecated but still part of the spec.
+    let declared = ctx.client_capabilities().sampling.is_some();
+    #[allow(deprecated)]
+    let required = spec::ClientCapabilities {
+        sampling: Some(spec::ClientCapabilitiesSampling::default()),
+        ..spec::ClientCapabilities::default()
+    };
+    Ok(Box::pin(async move {
+        if declared {
+            "ok".into_tool_result()
+        } else {
+            Err::<String, _>(ToolError::missing_client_capability(&required)).into_tool_result()
+        }
+    }))
+}
+
+#[tokio::test]
+async fn tools_can_return_protocol_errors() {
+    let s = ServerBuilder::new("s", "1")
+        .tool_def(simple("needs_sampling", needs_sampling))
+        .build()
+        .unwrap();
+    let r = request(
+        &s,
+        "tools/call",
+        json!({ "name": "needs_sampling", "arguments": {}, "_meta": meta() }),
+    )
+    .await;
+    assert_eq!(error_code(&r), -32021);
+    assert_eq!(
+        r["error"]["data"],
+        json!({ "requiredCapabilities": { "sampling": {} } })
+    );
+
+    let mut declared = meta();
+    declared["io.modelcontextprotocol/clientCapabilities"] = json!({ "sampling": {} });
+    let r = request(
+        &s,
+        "tools/call",
+        json!({ "name": "needs_sampling", "arguments": {}, "_meta": declared }),
+    )
+    .await;
+    assert_eq!(r["result"]["content"][0]["text"], "ok");
+}
+
 #[test]
 fn build_validates_configuration() {
     let dup = ServerBuilder::new("s", "1")

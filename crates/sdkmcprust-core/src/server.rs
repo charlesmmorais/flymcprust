@@ -587,7 +587,10 @@ impl Server {
 
         let mut result = match outcome {
             Ok(ToolOutput::Complete(result)) => result,
-            Err(error) => error.into_call_result(&tool.name),
+            Err(error) => match error.into_protocol() {
+                Ok(protocol_error) => return Err(protocol_error),
+                Err(error) => error.into_call_result(&tool.name),
+            },
         };
         result.result_type = COMPLETE.to_owned();
         if let Some(server_meta) = &self.inner.result_meta {

@@ -97,6 +97,34 @@ feature, `.auto_tools()` collects every `#[tool]` in the binary.
 | Resources, prompts, completion, subscriptions, MRTR, Tasks, Apps, OAuth | Planned; the architecture already reserves their place ([ARCHITECTURE](docs/ARCHITECTURE.md) §12) |
 | 2025-11-25 (legacy) clients | Planned (transport-edge adapter). Today they get an error naming the supported versions |
 
+### Official conformance suite
+
+[`examples/conformance-server`](examples/conformance-server) exposes the
+fixtures of `@modelcontextprotocol/conformance`, and CI runs every 2026-07-28
+server scenario against it. Known gaps are listed in
+[`conformance-baseline.yml`](conformance-baseline.yml), and CI fails on any
+other failure or on a stale entry.
+
+Results with `@modelcontextprotocol/conformance@0.2.0-alpha.12` on 2026-10-25:
+**108 checks pass and 26 fail**. Every failure is in a feature not built yet
+(resources, prompts, completion, progress, logging, MRTR).
+
+| Scenario | Result |
+| --- | --- |
+| `server-stateless` | 23/25 (the 2 failures need logging/MRTR fixtures) |
+| `tools-list`, `tools-call-{simple-text,image,audio,embedded-resource,mixed-content,error}` | all pass |
+| `json-schema-2020-12` | 8/8 |
+| `http-header-validation` | 14/14 |
+| `http-custom-header-server-validation` | 10/10 |
+| `dns-rebinding-protection` | 2/2 |
+| `caching` | 4/7 (the 3 failures are prompts/resources lists) |
+
+To reproduce locally, run `cargo run -p conformance-server`, then:
+
+```bash
+npx @modelcontextprotocol/conformance@0.2.0-alpha.12 server --url http://127.0.0.1:3000/mcp --spec-version 2026-07-28 --suite all --expected-failures conformance-baseline.yml
+```
+
 ## Try it with the MCP Inspector
 
 The example server lives in [`examples/calculadora`](examples/calculadora).

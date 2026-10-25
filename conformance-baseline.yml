@@ -1,0 +1,41 @@
+# Known failures of the official MCP conformance suite
+# (@modelcontextprotocol/conformance, 2026-07-28 server scenarios) against
+# examples/conformance-server. Every entry is a feature that phase 1 does not
+# implement yet. CI fails on any other failure, and also when an entry starts
+# passing (stale baseline), so remove entries as features land.
+server:
+  # Diagnostic fixtures that need logging and MRTR elicitation.
+  - server-stateless:sep-2575-http-server-no-independent-requests-on-stream
+  - server-stateless:sep-2575-server-no-log-without-loglevel
+  # Progress notifications.
+  - tools-call-with-progress
+  # Completion, resources and prompts.
+  - completion-complete
+  - resources-list
+  - resources-read-text
+  - resources-read-binary
+  - resources-templates-read
+  - prompts-list
+  - prompts-get-simple
+  - prompts-get-with-args
+  - prompts-get-embedded-resource
+  - prompts-get-with-image
+  - caching:sep-2549-prompts-list-caching-hints
+  - caching:sep-2549-resources-list-caching-hints
+  - caching:sep-2549-resources-templates-list-caching-hints
+  # Resource-not-found behavior (SHOULD-level warnings until resources exist).
+  - sep-2164-resource-not-found
+  # Multi round-trip requests (InputRequiredResult).
+  - input-required-result-basic-elicitation
+  - input-required-result-basic-sampling
+  - input-required-result-basic-list-roots
+  - input-required-result-request-state
+  - input-required-result-multiple-input-requests
+  - input-required-result-multi-round
+  - input-required-result-non-tool-request
+  - input-required-result-result-type
+  - input-required-result-tampered-state
+  - input-required-result-capability-check
+  # MRTR SHOULD-level checks (warnings until MRTR exists).
+  - input-required-result-missing-input-response
+  - input-required-result-ignore-extra-params

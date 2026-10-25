@@ -1,0 +1,16 @@
+[package]
+name = "conformance-server"
+description = "Server exposing the fixtures of the official MCP conformance suite"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+sdkmcprust = { workspace = true, features = ["http"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+
+[lints]
+workspace = true

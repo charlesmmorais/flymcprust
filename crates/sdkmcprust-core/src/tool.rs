@@ -99,6 +99,7 @@ pub struct ToolError {
 
 enum ToolErrorKind {
     User(Cow<'static, str>),
+    Protocol(crate::error::McpError),
     InvalidArguments(String),
     Internal(Box<dyn std::error::Error + Send + Sync + 'static>),
     Timeout,
@@ -111,6 +112,26 @@ impl ToolError {
         Self {
             kind: ToolErrorKind::User(message.into()),
         }
+    }
+
+    /// A protocol-level (JSON-RPC) error instead of a tool result. Use it
+    /// for conditions the specification defines as protocol errors, such as
+    /// a missing client capability.
+    #[must_use]
+    pub fn protocol(error: crate::error::McpError) -> Self {
+        Self {
+            kind: ToolErrorKind::Protocol(error),
+        }
+    }
+
+    /// The request needs client capabilities the client did not declare:
+    /// a `-32021` JSON-RPC error (HTTP 400) listing them, as the
+    /// specification requires. See [`Ctx::client_capabilities`].
+    ///
+    /// [`Ctx::client_capabilities`]: crate::Ctx::client_capabilities
+    #[must_use]
+    pub fn missing_client_capability(required: &spec::ClientCapabilities) -> Self {
+        Self::protocol(crate::error::McpError::missing_client_capability(required))
     }
 
     /// An internal error: logged on the server, hidden from the client.
@@ -141,10 +162,20 @@ impl ToolError {
         }
     }
 
+    /// Splits off protocol errors, which become JSON-RPC errors rather than
+    /// tool results.
+    pub(crate) fn into_protocol(self) -> Result<crate::error::McpError, Self> {
+        match self.kind {
+            ToolErrorKind::Protocol(error) => Ok(error),
+            kind => Err(Self { kind }),
+        }
+    }
+
     /// Converts into an `isError` result, logging internal details.
     pub(crate) fn into_call_result(self, tool: &str) -> CallToolResult {
         let message: Cow<'static, str> = match self.kind {
             ToolErrorKind::User(message) => message,
+            ToolErrorKind::Protocol(error) => Cow::Owned(error.message().to_owned()),
             ToolErrorKind::InvalidArguments(details) => {
                 Cow::Owned(format!("Invalid arguments: {details}"))
             }
@@ -174,6 +205,7 @@ impl fmt::Debug for ToolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             ToolErrorKind::User(m) => f.debug_tuple("User").field(m).finish(),
+            ToolErrorKind::Protocol(e) => f.debug_tuple("Protocol").field(e).finish(),
             ToolErrorKind::InvalidArguments(m) => {
                 f.debug_tuple("InvalidArguments").field(m).finish()
             }
@@ -188,6 +220,7 @@ impl fmt::Display for ToolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             ToolErrorKind::User(m) => f.write_str(m),
+            ToolErrorKind::Protocol(e) => write!(f, "protocol error: {e}"),
             ToolErrorKind::InvalidArguments(m) => write!(f, "invalid arguments: {m}"),
             ToolErrorKind::Internal(e) => write!(f, "internal error: {e}"),
             ToolErrorKind::Timeout => f.write_str("timed out"),

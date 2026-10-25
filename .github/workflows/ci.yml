@@ -123,3 +123,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo bench -p sdkmcprust-core --no-run
+
+  conformance:
+    name: MCP conformance (2026-07-28)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cargo build -p conformance-server
+      - name: Run the official suite against the fixture server
+        run: |
+          target/debug/conformance-server 127.0.0.1:3000 &
+          for _ in $(seq 30); do
+            curl -s -o /dev/null http://127.0.0.1:3000/mcp && break
+            sleep 1
+          done
+          npx --yes @modelcontextprotocol/conformance@0.2.0-alpha.12 server             --url http://127.0.0.1:3000/mcp --spec-version 2026-07-28 --suite all             --expected-failures conformance-baseline.yml
