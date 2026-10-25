@@ -388,6 +388,29 @@ async fn mirrored_parameters_are_validated() {
     assert_eq!(r.0, StatusCode::BAD_REQUEST);
 }
 
+/// Security review finding 7: integers beyond 2^53 must compare exactly,
+/// or a gateway routing on the header and the server reading the body could
+/// disagree on the value.
+#[tokio::test]
+async fn mirrored_integers_compare_exactly() {
+    let body = call(
+        "execute_sql",
+        json!({ "limit": 9_007_199_254_740_993_u64, "query": "SELECT 1" }),
+    );
+    let r = send_json(
+        post(&body).header("mcp-param-limit", "9007199254740992"),
+        &body,
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST, "{:?}", r.2);
+    let ok = send_json(
+        post(&body).header("mcp-param-limit", "9007199254740993"),
+        &body,
+    )
+    .await;
+    assert_eq!(ok.0, StatusCode::OK, "{:?}", ok.2);
+}
+
 #[test]
 fn invalid_header_annotations_fail_the_build() {
     let schema: spec::ToolInputSchema = serde_json::from_value(json!({
@@ -564,4 +587,100 @@ async fn end_to_end_over_tcp() {
 
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
+}
+
+/// A body that sends one chunk and then never completes (a slow client).
+fn stalled_body() -> http_body_util::StreamBody<
+    impl futures_util::Stream<Item = Result<http_body::Frame<Bytes>, std::io::Error>>,
+> {
+    use futures_util::StreamExt as _;
+    let first = futures_util::stream::once(async {
+        Ok(http_body::Frame::data(Bytes::from_static(b"{\"jsonrpc\"")))
+    });
+    http_body_util::StreamBody::new(first.chain(futures_util::stream::pending()))
+}
+
+fn stalled_request() -> Request<
+    http_body_util::StreamBody<
+        impl futures_util::Stream<Item = Result<http_body::Frame<Bytes>, std::io::Error>>,
+    >,
+> {
+    post(&json!({ "method": "tools/list" }))
+        .body(stalled_body())
+        .unwrap()
+}
+
+/// Security review finding 4: slow bodies time out instead of holding the
+/// request forever.
+#[tokio::test]
+async fn slow_bodies_time_out() {
+    let mut service = StreamableHttpService::with_config(
+        server(),
+        HttpConfig::new().body_timeout(std::time::Duration::from_millis(100)),
+    );
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        service.call(stalled_request()),
+    )
+    .await
+    .expect("the body timeout must fire")
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+}
+
+/// Security review finding 4: the number of requests in flight is bounded,
+/// which bounds the memory held by request bodies.
+#[tokio::test]
+async fn in_flight_requests_are_bounded() {
+    let service = StreamableHttpService::with_config(server(), HttpConfig::new().max_in_flight(1));
+    let mut first = service.clone();
+    let stalled = tokio::spawn(async move { first.call(stalled_request()).await });
+    // Let the first request take the only slot.
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    let body = call("echo", json!({ "text": "hi" }));
+    let request = post(&body)
+        .body(Full::new(Bytes::from(serde_json::to_vec(&body).unwrap())))
+        .unwrap();
+    let response = service.clone().call(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()["retry-after"], "1");
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    stalled.abort();
+}
+
+/// Security review finding 3: connections that never send a request are
+/// closed by the header timeout, so they cannot hold connection slots.
+#[tokio::test]
+async fn idle_connections_are_closed() {
+    use tokio::io::AsyncReadExt as _;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let service = StreamableHttpService::with_config(
+        server(),
+        HttpConfig::new().header_timeout(std::time::Duration::from_millis(200)),
+    );
+    let task = tokio::spawn(sdkmcprust_core::transport::http::serve(
+        listener,
+        service,
+        "/mcp",
+        std::future::pending(),
+    ));
+    for partial in [&b""[..], b"P", b"POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n"] {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut stream, partial)
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read_to_end(&mut buf),
+        )
+        .await
+        .expect("the server must close an idle connection")
+        .ok();
+    }
+    task.abort();
 }

@@ -37,5 +37,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "match_uri"
+path = "fuzz_targets/match_uri.rs"
+test = false
+doc = false
+bench = false
+
 # Keep this crate out of the parent workspace.
 [workspace]

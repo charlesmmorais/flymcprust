@@ -9,7 +9,9 @@
 //! 1. `Origin` must be allowed (403); `Host` must be allowed (403).
 //! 2. Only `POST` (405); `OPTIONS` answers CORS preflights from allowed origins.
 //! 3. `Content-Type: application/json` (415); `Accept` must allow JSON (406).
-//! 4. The body is read up to the message limit (413).
+//! 4. At most [`HttpConfig::max_in_flight`] requests are processed at once
+//!    (503 beyond that); the body is read up to the message limit (413)
+//!    within [`HttpConfig::body_timeout`] (408).
 //! 5. `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` and recognized
 //!    `Mcp-Param-*` headers must match the body (400, `-32020`).
 //! 6. The message is dispatched; notifications get `202`, unknown methods
@@ -38,6 +40,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::value::RawValue;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::TransportContext;
@@ -58,8 +61,6 @@ const BASE64_PREFIX: &str = "=?base64?";
 const BASE64_SUFFIX: &str = "?=";
 const ALLOWED_REQUEST_HEADERS: &str =
     "content-type, accept, authorization, mcp-protocol-version, mcp-method, mcp-name";
-/// Time allowed to receive a request's headers (slow-loris protection).
-const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// `Origin` values accepted by the transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +93,10 @@ pub enum AllowedHosts {
 pub struct HttpConfig {
     origins: AllowedOrigins,
     hosts: AllowedHosts,
+    header_timeout: Duration,
+    body_timeout: Duration,
+    max_in_flight: usize,
+    max_connections: usize,
 }
 
 impl Default for HttpConfig {
@@ -99,6 +104,10 @@ impl Default for HttpConfig {
         Self {
             origins: AllowedOrigins::Localhost,
             hosts: AllowedHosts::Localhost,
+            header_timeout: Duration::from_secs(10),
+            body_timeout: Duration::from_secs(30),
+            max_in_flight: 256,
+            max_connections: 1024,
         }
     }
 }
@@ -124,6 +133,40 @@ impl HttpConfig {
         self.hosts = hosts;
         self
     }
+
+    /// Time allowed, in [`serve`], to receive a request's headers, counted
+    /// from when the connection opens or becomes idle. Slower or idle
+    /// connections are closed (slow-loris protection). Default: 10 s.
+    #[must_use]
+    pub fn header_timeout(mut self, timeout: Duration) -> Self {
+        self.header_timeout = timeout;
+        self
+    }
+
+    /// Time allowed to receive a request body; slower clients get `408`.
+    /// Default: 30 s.
+    #[must_use]
+    pub fn body_timeout(mut self, timeout: Duration) -> Self {
+        self.body_timeout = timeout;
+        self
+    }
+
+    /// Maximum number of requests being read or processed at once, which
+    /// bounds the memory used for request bodies (each up to the message
+    /// limit). Further requests get `503`. Default: 256.
+    #[must_use]
+    pub fn max_in_flight(mut self, requests: usize) -> Self {
+        self.max_in_flight = requests.max(1);
+        self
+    }
+
+    /// Maximum number of open connections in [`serve`]; further connections
+    /// wait in the operating system's accept queue. Default: 1024.
+    #[must_use]
+    pub fn max_connections(mut self, connections: usize) -> Self {
+        self.max_connections = connections.max(1);
+        self
+    }
 }
 
 /// Streamable HTTP as a `tower::Service`.
@@ -131,6 +174,7 @@ impl HttpConfig {
 pub struct StreamableHttpService {
     server: Server,
     config: Arc<HttpConfig>,
+    in_flight: Arc<Semaphore>,
 }
 
 impl StreamableHttpService {
@@ -145,6 +189,7 @@ impl StreamableHttpService {
     pub fn with_config(server: Server, config: HttpConfig) -> Self {
         Self {
             server,
+            in_flight: Arc::new(Semaphore::new(config.max_in_flight)),
             config: Arc::new(config),
         }
     }
@@ -206,8 +251,31 @@ impl StreamableHttpService {
             );
         }
 
+        // Bounds the memory held by bodies being read or processed.
+        let Ok(_permit) = Arc::clone(&self.in_flight).try_acquire_owned() else {
+            let mut response = rpc_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                None,
+                &McpError::internal_with_message("The server is busy; retry later."),
+                cors.as_ref(),
+            );
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+            return response;
+        };
+
         let limits = self.server.limits();
-        let bytes = match Limited::new(body, limits.max_message_bytes).collect().await {
+        let read = Limited::new(body, limits.max_message_bytes).collect();
+        let Ok(read) = tokio::time::timeout(self.config.body_timeout, read).await else {
+            return rpc_error(
+                StatusCode::REQUEST_TIMEOUT,
+                None,
+                &McpError::invalid_request("Request body not received in time"),
+                cors.as_ref(),
+            );
+        };
+        let bytes = match read {
             Ok(collected) => collected.to_bytes(),
             Err(error) => {
                 let (status, message) = if error.downcast_ref::<LengthLimitError>().is_some() {
@@ -329,8 +397,8 @@ pub async fn serve(
     path: &str,
     shutdown: impl Future<Output = ()>,
 ) -> io::Result<()> {
-    use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-    use hyper_util::server::conn::auto;
+    use hyper::server::conn::http1;
+    use hyper_util::rt::{TokioIo, TokioTimer};
     use hyper_util::server::graceful::GracefulShutdown;
 
     if let Ok(addr) = listener.local_addr()
@@ -345,15 +413,27 @@ pub async fn serve(
 
     let path: Arc<str> = Arc::from(path);
     let grace = service.server.limits().tool_timeout;
-    let mut builder = auto::Builder::new(TokioExecutor::new());
+    let connections = Arc::new(Semaphore::new(service.config.max_connections));
+    // HTTP/1.1 only: its header timeout runs from the moment a connection
+    // opens, so idle connections cannot hold slots. (Automatic HTTP/2
+    // detection waits for the first bytes without any deadline.) Mount
+    // `StreamableHttpService` in another server for HTTP/2.
+    let mut builder = http1::Builder::new();
     builder
-        .http1()
         .timer(TokioTimer::new())
-        .header_read_timeout(HEADER_READ_TIMEOUT);
+        .header_read_timeout(service.config.header_timeout);
     let graceful = GracefulShutdown::new();
     tokio::pin!(shutdown);
 
     loop {
+        // At capacity, stop accepting; new connections wait in the backlog.
+        let permit = tokio::select! {
+            permit = Arc::clone(&connections).acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_closed) => break,
+            },
+            () = &mut shutdown => break,
+        };
         let (stream, peer) = tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok(accepted) => accepted,
@@ -381,13 +461,13 @@ pub async fn serve(
                     }
                 }
             });
-        let connection =
-            builder.serve_connection_with_upgrades(TokioIo::new(stream), hyper_service);
-        let connection = graceful.watch(connection.into_owned());
+        let connection = builder.serve_connection(TokioIo::new(stream), hyper_service);
+        let connection = graceful.watch(connection);
         tokio::spawn(async move {
             if let Err(error) = connection.await {
                 tracing::debug!(%peer, %error, "connection closed with an error");
             }
+            drop(permit);
         });
     }
 
@@ -503,11 +583,7 @@ fn validate_param_headers(
                         value.as_bool().map(|b| if b { "true" } else { "false" })
                             == Some(header.as_ref())
                     }
-                    // Compared numerically: `42` and `42.0` are equal.
-                    ParamKind::Integer => match (value.as_f64(), header.parse::<f64>()) {
-                        (Some(a), Ok(b)) => (a - b).abs() < f64::EPSILON,
-                        _ => false,
-                    },
+                    ParamKind::Integer => integers_equal(value, &header),
                 }
             }
         };
@@ -519,6 +595,27 @@ fn validate_param_headers(
         }
     }
     Ok(())
+}
+
+/// Compares a JSON integer with a header value exactly (no floating-point
+/// rounding). `42.0` is accepted for `42` within the exactly representable
+/// range of `f64`.
+fn integers_equal(value: &Value, header: &str) -> bool {
+    const EXACT_F64: f64 = 9_007_199_254_740_992.0; // 2^53
+    let as_integer = |text: &str, float: Option<f64>| -> Option<i128> {
+        text.parse::<i128>().ok().or_else(|| {
+            float
+                .filter(|f| f.fract() == 0.0 && f.abs() <= EXACT_F64)
+                // The guard above keeps the value within i128 exactly.
+                .map(|f| f as i128)
+        })
+    };
+    let body = match value {
+        Value::Number(n) => as_integer(&n.to_string(), n.as_f64()),
+        _ => None,
+    };
+    let header = as_integer(header, header.parse::<f64>().ok());
+    matches!((body, header), (Some(a), Some(b)) if a == b)
 }
 
 /// Returns the single value of a header; duplicates and non-visible-ASCII
@@ -678,6 +775,10 @@ fn json(status: StatusCode, body: Vec<u8>, cors: Option<&HeaderValue>) -> Respon
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
     );
     with_cors(&mut response, cors);
     response

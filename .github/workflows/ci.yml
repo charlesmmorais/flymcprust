@@ -114,6 +114,7 @@ jobs:
         run: |
           cargo fuzz run parse_message -- -max_total_time=60
           cargo fuzz run handle_message -- -max_total_time=60
+          cargo fuzz run match_uri -- -max_total_time=60
 
   bench:
     name: benchmarks compile

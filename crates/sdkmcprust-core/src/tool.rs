@@ -138,7 +138,7 @@ impl ToolError {
     /// Invalid input, with a client-safe explanation (shown to the client).
     pub fn invalid_argument(message: impl Into<String>) -> Self {
         Self {
-            kind: ToolErrorKind::InvalidArguments(message.into()),
+            kind: ToolErrorKind::InvalidArguments(crate::error::sanitize(&message.into())),
         }
     }
 
@@ -174,7 +174,7 @@ impl ToolError {
     #[must_use]
     pub fn invalid_arguments(error: &serde_json::Error) -> Self {
         Self {
-            kind: ToolErrorKind::InvalidArguments(error.to_string()),
+            kind: ToolErrorKind::InvalidArguments(crate::error::sanitize(&error.to_string())),
         }
     }
 

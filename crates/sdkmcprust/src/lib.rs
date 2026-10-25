@@ -48,7 +48,7 @@ pub use sdkmcprust_core::{
     Limits, MIN_REQUEST_STATE_KEY_BYTES, McpError, McpRequest, MirroredParam, ParamKind, Prompt,
     PromptArguments, PromptDef, Resource, ResourceContents, ResourceDef, Server, ServerBuilder,
     State, Tool, ToolDef, ToolError, ToolOutput, ToolResult, TransportContext, UriTemplate,
-    UriTemplateError, UriVars, jsonrpc, message, spec, transport,
+    UriTemplateError, UriVars, jsonrpc, message, security, spec, transport,
 };
 
 #[cfg(feature = "macros")]

@@ -278,6 +278,15 @@ measurable change (MRTR digests are computed only when input is requested).
 | `dispatch/tools_call_64KiB` | 115 µs | Echo of a 64 KiB string |
 | `serialize/call_result` | 0.10 µs | Response envelope |
 
+## Security
+
+Secure defaults are on without configuration: message, depth, time and
+concurrency limits, localhost-only HTTP, panic isolation, sanitized errors,
+signed MRTR state. [docs/SECURITY.md](docs/SECURITY.md) has the threat model,
+what your application must still do (authentication, `security::confine_path`
+for files, idempotent code before `ctx.elicit`), and the review log. Report
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
 ## Development
 
 See [CLAUDE.md](CLAUDE.md) for conventions and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)

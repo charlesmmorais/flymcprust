@@ -17,7 +17,7 @@
 //! request, or use them after the expiry. Answers the client sends in this
 //! round's `inputResponses` are client input like the arguments themselves.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -171,6 +171,9 @@ pub(crate) struct Round {
     responses: BTreeMap<String, Value>,
     /// Requests issued in this round that have no answer yet.
     pending: Mutex<Vec<(String, Value)>>,
+    /// Answers the handler read; only these are carried to the next round,
+    /// so unrequested data is never signed into `requestState`.
+    used: Mutex<BTreeSet<String>>,
 }
 
 impl Round {
@@ -205,6 +208,7 @@ impl Round {
             number,
             responses,
             pending: Mutex::new(Vec::new()),
+            used: Mutex::new(BTreeSet::new()),
         })
     }
 
@@ -225,7 +229,14 @@ impl Round {
             a: key.args_digest(),
             e: expiry,
             n: self.number.saturating_add(1),
-            r: self.responses.clone(),
+            r: {
+                let used = self.used.lock().unwrap_or_else(PoisonError::into_inner);
+                self.responses
+                    .iter()
+                    .filter(|(k, _)| used.contains(k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            },
         })?;
         let mut result = Map::new();
         result.insert("resultType".to_owned(), Value::from("input_required"));
@@ -244,7 +255,12 @@ impl Round {
     }
 
     fn response(&self, key: &str) -> Option<&Value> {
-        self.responses.get(key)
+        let value = self.responses.get(key)?;
+        self.used
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key.to_owned());
+        Some(value)
     }
 
     fn push(&self, key: &str, request: Value) {
@@ -527,13 +543,23 @@ mod tests {
     #[test]
     fn state_round_trips_and_accumulates_answers() {
         let codec = codec();
-        let first = Round::start(&codec, &key("t"), Some(json!({ "q1": 1 })), None).unwrap();
+        let first = Round::start(
+            &codec,
+            &key("t"),
+            Some(json!({ "q1": 1, "unread": 0 })),
+            None,
+        )
+        .unwrap();
+        // The handler reads `q1` only.
+        assert_eq!(first.response("q1"), Some(&json!(1)));
         let token = round_trip(&codec, &first);
         let second =
             Round::start(&codec, &key("t"), Some(json!({ "q2": 2 })), Some(&token)).unwrap();
         assert_eq!(second.number, 1);
         assert_eq!(second.response("q1"), Some(&json!(1)));
         assert_eq!(second.response("q2"), Some(&json!(2)));
+        // Unread answers are not carried over.
+        assert_eq!(second.response("unread"), None);
     }
 
     #[test]

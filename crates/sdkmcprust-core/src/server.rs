@@ -876,10 +876,21 @@ impl Server {
             Message::Notification(_) => None,
             Message::Request(req) => {
                 let id = req.id.clone();
-                match self.dispatch(req, transport, cancellation).await {
-                    Ok(Some(result)) => Some(Response::Result { id, result }),
-                    Ok(None) => None,
-                    Err(error) => Some(Response::error(Some(id), error)),
+                // Handler futures are already isolated; this also covers
+                // synchronous user code (argument parsers, completion
+                // providers) and any bug in the dispatch path.
+                let dispatched =
+                    std::panic::AssertUnwindSafe(self.dispatch(req, transport, cancellation))
+                        .catch_unwind()
+                        .await;
+                match dispatched {
+                    Ok(Ok(Some(result))) => Some(Response::Result { id, result }),
+                    Ok(Ok(None)) => None,
+                    Ok(Err(error)) => Some(Response::error(Some(id), error)),
+                    Err(_panic) => {
+                        tracing::error!("request handling panicked");
+                        Some(Response::error(Some(id), McpError::internal()))
+                    }
                 }
             }
         }
@@ -1382,7 +1393,12 @@ struct CompletionContext {
 
 fn parse_params<'a, T: Deserialize<'a>>(params: Option<&'a RawValue>) -> Result<T, McpError> {
     let raw = params.map_or("{}", RawValue::get);
-    serde_json::from_str(raw).map_err(|e| McpError::invalid_params(format!("Invalid params: {e}")))
+    serde_json::from_str(raw).map_err(|e| {
+        McpError::invalid_params(format!(
+            "Invalid params: {}",
+            crate::error::sanitize(&e.to_string())
+        ))
+    })
 }
 
 fn to_raw<T: serde::Serialize>(value: &T) -> Result<Box<RawValue>, serde_json::Error> {

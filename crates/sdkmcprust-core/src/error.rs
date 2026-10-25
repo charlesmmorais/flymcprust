@@ -239,6 +239,54 @@ impl std::fmt::Display for McpError {
 
 impl std::error::Error for McpError {}
 
+/// Maximum length of an error message built from client input.
+const MAX_MESSAGE_CHARS: usize = 512;
+
+/// Maximum length of a quoted fragment kept in a sanitized message.
+const MAX_QUOTED_CHARS: usize = 32;
+
+/// Makes a message that may quote client input safe to send back: quoted
+/// fragments longer than a few words are shortened (deserializer messages
+/// quote the offending value), and the whole message is capped, so a large
+/// request never produces a large error.
+pub(crate) fn sanitize(message: &str) -> String {
+    let mut out = String::with_capacity(message.len().min(MAX_MESSAGE_CHARS));
+    let mut in_quote = false;
+    let mut quoted = 0usize;
+    let mut escaped = false;
+    for c in message.chars() {
+        if in_quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_quote = false;
+                if quoted > MAX_QUOTED_CHARS {
+                    out.push('…');
+                }
+                out.push('"');
+                continue;
+            }
+            quoted += 1;
+            if quoted <= MAX_QUOTED_CHARS {
+                out.push(c);
+            }
+            continue;
+        }
+        if c == '"' {
+            in_quote = true;
+            quoted = 0;
+        }
+        out.push(c);
+        if out.chars().count() >= MAX_MESSAGE_CHARS {
+            out.push('…');
+            break;
+        }
+    }
+    out
+}
+
 /// Shortens client-provided text before echoing it in an error message.
 pub(crate) fn truncate(text: &str) -> Cow<'_, str> {
     match text.char_indices().nth(MAX_ECHO_CHARS) {
@@ -259,6 +307,19 @@ mod tests {
             err.data(),
             Some(&json!({ "supported": ["2026-07-28"], "requested": "1900-01-01" }))
         );
+    }
+
+    #[test]
+    fn sanitize_shortens_quoted_input() {
+        let long = format!(
+            "invalid type: string \"{}\", expected f64 at line 1 column 9",
+            "A".repeat(10_000)
+        );
+        let clean = sanitize(&long);
+        assert!(clean.len() < 200, "{clean}");
+        assert!(clean.contains("expected f64"));
+        assert_eq!(sanitize("missing field `a`"), "missing field `a`");
+        assert!(sanitize(&"x".repeat(10_000)).chars().count() <= MAX_MESSAGE_CHARS + 1);
     }
 
     #[test]

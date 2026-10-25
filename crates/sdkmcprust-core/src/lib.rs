@@ -19,6 +19,7 @@ mod mirror;
 mod mrtr;
 mod prompt;
 mod resource;
+pub mod security;
 mod server;
 #[cfg(feature = "test-client")]
 pub mod testing;

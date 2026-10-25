@@ -232,10 +232,17 @@ bytes ─► size limit ─► depth pre-scan ─► JSON-RPC envelope parse
 | --- | --- |
 | Maximum message size (HTTP body / stdio line) | 4 MiB |
 | Maximum JSON nesting depth | 64 |
-| Per-tool timeout | 30 s |
-| Maximum concurrent requests | 64 |
+| Per-handler timeout (tools, resources, prompts) | 30 s |
+| Maximum concurrent handler invocations | 64 |
 | HTTP bind address | `127.0.0.1` |
-| Allowed `Origin`s | localhost origins only (absent `Origin` accepted) |
+| Allowed `Origin`s and `Host`s | localhost only (absent `Origin` accepted) |
+| HTTP header timeout (from connection open or idle) | 10 s |
+| HTTP body timeout | 30 s |
+| HTTP requests being read or processed | 256 |
+| HTTP open connections (built-in server) | 1024 |
+| `requestState` lifetime | 10 min |
+
+The threat model behind these defaults is in [SECURITY.md](SECURITY.md).
 
 ### 6.4 Errors
 
@@ -301,22 +308,24 @@ spec requires. Phase 1 ships the trait and an empty registry.
 ### 7.2 Streamable HTTP (stateless)
 
 The transport is implemented as `tower::Service<http::Request<B>>` on top of
-`http` and `http-body`. A convenience `serve()` uses `hyper-util`. Axum users
-can mount it with `Router::nest_service("/mcp", svc)`.
+`http` and `http-body`. A convenience `serve()` runs it on hyper's HTTP/1.1
+server (see the decision log for why not HTTP/2). Axum users can mount it
+with `Router::nest_service("/mcp", svc)`.
 
 **Rejected: building on axum.** It would add a mandatory heavy dependency and
 couple our release cycle to axum's.
 
 Request handling, in order:
 
-1. Only POST is accepted. GET and DELETE get `405`.
-2. `Origin` is checked against the allowlist; an invalid origin gets `403`.
-   `Host` is also checked against the allowlist when bound to loopback, as
-   defense in depth against DNS rebinding.
-3. `Content-Type: application/json` is required, and `Accept` must list both
-   `application/json` and `text/event-stream`.
-4. The body is read with `http-body-util::Limited`; an oversized body gets
-   `413`.
+1. `Origin` and `Host` are checked against their allowlists (`403`); both
+   default to localhost, as protection against DNS rebinding.
+2. Only POST is accepted (GET and DELETE get `405`); `OPTIONS` answers CORS
+   preflights from allowed origins.
+3. `Content-Type: application/json` is required (`415`), and `Accept`, when
+   present, must allow `application/json` (`406`).
+4. At most 256 requests are read or processed at once (`503`). The body is
+   read with `http-body-util::Limited` within the body timeout; an oversized
+   body gets `413`, a slow one `408`.
 5. Header and body validation:
    - `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` are decoded (base64
      sentinel) and compared with the body. A missing or mismatching header gets
@@ -417,18 +426,25 @@ exception to the safety rules is needed.
   this document.
 - `clippy::unwrap_used`, `clippy::expect_used`, `clippy::panic` and
   `clippy::indexing_slicing` are set to `deny` outside tests.
-- No panic may escape a tool. Tool futures run under `catch_unwind`, which
-  becomes a generic error.
-- `requestState` (MRTR, future work) will be sealed with HMAC/AEAD, a short
-  expiry and request binding, as the spec requires.
+- No panic may escape request handling. Handler futures and the whole
+  dispatch (including synchronous argument parsers and completion providers)
+  run under `catch_unwind`; a panic becomes a generic error.
+- `requestState` is sealed with HMAC-SHA256, a short expiry and request
+  binding (see the decision log).
+- Untrusted input is never echoed at length: quoted fragments in error
+  messages are shortened and messages capped.
+- The threat model, the responsibilities left to applications and the log
+  of security reviews are in [SECURITY.md](SECURITY.md).
 - Network `$ref`s are never dereferenced.
 - **Supply chain.** `cargo-deny` checks licenses, advisories, bans and sources;
   `cargo-audit` runs in CI. Spec downloads are verified against a SHA-256
   lock.
-- **Fuzzing.** The `fuzz/` directory holds two targets. `parse_message`
+- **Fuzzing.** The `fuzz/` directory holds three targets. `parse_message`
   covers the envelope parser and the depth scanner. `handle_message` covers
-  full request handling: `_meta` validation, dispatch and error mapping. CI
-  runs each one for 60 seconds on nightly.
+  full request handling: `_meta` validation, dispatch and error mapping.
+  `match_uri` covers URI templates and asserts that single-segment values
+  never contain separators or control characters. CI runs each one for 60
+  seconds on nightly.
 - **Documented exception.** The fuzz harness cannot use
   `#![forbid(unsafe_code)]`, because `libfuzzer-sys`'s `fuzz_target!` expands
   to `unsafe` FFI glue. It is test-only code outside the workspace and is
@@ -480,4 +496,7 @@ exception to the safety rules is needed.
 | 2026-10-25 | MRTR uses the *replay* model (chosen by the owner): `ctx.elicit(key, msg).await?` returns the answer if the client sent it (this round or an earlier one), otherwise records the request and ends the round with an internal "input required" error that the runtime turns into `InputRequiredResult`. Handlers rerun from the start each round, so code before an input call must be idempotent. Questions awaited together (`tokio::join!`) share a round. This replaces the planned `ToolOutput::InputRequired`: an error kind propagates with `?` through any return type. |
 | 2026-10-25 | `requestState` is always emitted and carries the answers of earlier rounds, so the server stays stateless. It is HMAC-SHA256 signed (`hmac` + `sha2`, chosen by the owner) and bound to the method, the target (tool/prompt name or resource URI), a digest of the arguments (whitespace- and key-order-insensitive) and an expiry (default 10 min). Failed verification is `-32602`. The key is random per process unless `request_state_key` (at least 32 bytes) is set, which multi-instance deployments need. Binding to the authenticated principal (a spec SHOULD) waits for OAuth. |
 | 2026-10-25 | Answers in the current round's `inputResponses` need no state: they are client input like arguments. Unknown keys are ignored; a missing answer is asked again; an answer that does not decode is `-32602`. Input requests check the client capabilities first (`-32021` otherwise). Sampling and roots helpers are `#[deprecated]` like the features (SEP-2577). |
+| 2026-10-25 | Security review (docs/SECURITY.md §6). Decoded URI-template values are re-checked (no `/`, `\` or control characters in single-segment values); `security::confine_path` is the supported way to map client paths to files. |
+| 2026-10-25 | The built-in HTTP server is HTTP/1.1 only. Automatic HTTP/1/HTTP/2 detection (`hyper-util` auto) waits for a connection's first bytes without any deadline, so idle sockets could pile up; HTTP/1.1's header timeout starts at connection open. HTTP/2 remains possible by mounting the tower service elsewhere. |
+| 2026-10-25 | HTTP bodies are read within a timeout and under an in-flight limit, because the handler concurrency limit only applies after the body is in memory. |
 | 2026-10-25 | Over HTTP, `initialize` skips header validation and gets `404` + `-32601` with a message naming the supported versions. The spec recommends that diagnostic for legacy clients and requires `404` for unimplemented methods. |

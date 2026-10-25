@@ -7,6 +7,13 @@
 //! | `{var}` | One or more characters other than `/`, `?` and `#` (percent-decoded) |
 //! | `{+var}` | One or more characters other than `?` and `#`, so it may span `/` (percent-decoded) |
 //! | `{/var}` | `/` followed by a `{var}` value |
+//!
+//! Decoded values are checked again, so encoding cannot smuggle characters
+//! past these rules: `{var}`, `{/var}` and query values never contain `/` or
+//! `\` (not even as `%2F` or `%5C`), and no value contains control
+//! characters (such as `%00` or `%0A`). A URI that breaks these rules does
+//! not match. `{+var}` values may contain `/` and `..`: handlers that map them
+//! to files must confine them (see the `security` module of `sdkmcprust`).
 //! | `{?a,b}`, `{&c}` | Optional query parameters, in any order (only at the end) |
 //!
 //! Matching is deterministic and linear in the URI length: a variable ends at
@@ -225,7 +232,7 @@ impl UriTemplate {
                     if raw.is_empty() || raw.contains(forbidden) {
                         return None;
                     }
-                    vars.push((name.clone(), percent_decode(raw)?));
+                    vars.push((name.clone(), decode_value(raw, *op != Op::Reserved)?));
                     rest = tail;
                 }
             }
@@ -239,7 +246,7 @@ impl UriTemplate {
                 if let Some(name) = self.query.iter().find(|n| n.as_str() == key)
                     && !vars.iter().any(|(n, _)| n == name)
                 {
-                    vars.push((name.clone(), percent_decode(value)?));
+                    vars.push((name.clone(), decode_value(value, true)?));
                 }
             }
         }
@@ -283,6 +290,14 @@ impl UriVars {
 
 fn is_var_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+/// Percent-decodes a variable value and re-checks it: no control
+/// characters, and no path separators when `single_segment`.
+fn decode_value(raw: &str, single_segment: bool) -> Option<String> {
+    let value = percent_decode(raw)?;
+    let forbidden = |c: char| c.is_control() || (single_segment && matches!(c, '/' | '\\'));
+    (!value.contains(forbidden)).then_some(value)
 }
 
 /// Decodes `%XX` escapes; `None` for malformed escapes or invalid UTF-8.
@@ -429,6 +444,28 @@ mod tests {
                 "{bad:?} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn decoded_values_are_rechecked() {
+        let t = "file:///docs/{name}";
+        for uri in [
+            "file:///docs/..%2Fsecret",
+            "file:///docs/..%5Csecret",
+            "file:///docs/..\\secret",
+            "file:///docs/a%00b",
+            "file:///docs/a%0Ab",
+        ] {
+            assert_eq!(vars(t, uri), None, "{uri}");
+        }
+        assert_eq!(vars(t, "file:///docs/a%20b"), pairs(&[("name", "a b")]));
+        assert_eq!(vars("q://x{?q}", "q://x?q=a%2Fb"), None);
+        // `{+var}` may span segments, but never carries control characters.
+        assert_eq!(
+            vars("file:///{+path}", "file:///a%2Fb/c"),
+            pairs(&[("path", "a/b/c")])
+        );
+        assert_eq!(vars("file:///{+path}", "file:///a%00"), None);
     }
 
     #[test]
