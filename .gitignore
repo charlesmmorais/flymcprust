@@ -1,0 +1,9 @@
+/target
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+**/*.rs.bk
+*.pdb
+.DS_Store
+.idea/
+.vscode/
