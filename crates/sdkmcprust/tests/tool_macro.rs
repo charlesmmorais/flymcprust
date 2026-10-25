@@ -162,8 +162,8 @@ async fn schemas_and_descriptions() {
         json!({
             "type": "object",
             "properties": {
-                "a": { "type": "number", "format": "double", "description": "First operand." },
-                "b": { "type": "number", "format": "double", "description": "Second operand." }
+                "a": { "type": "number", "description": "First operand." },
+                "b": { "type": "number", "description": "Second operand." }
             },
             "required": ["a", "b"],
             "additionalProperties": false

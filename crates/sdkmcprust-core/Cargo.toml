@@ -10,6 +10,9 @@ keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 base64 = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
@@ -53,7 +56,12 @@ test-client = []
 auto-register = ["dep:inventory"]
 
 [dev-dependencies]
+criterion = { version = "0.8.1", default-features = false, features = ["async_tokio", "cargo_bench_support"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util", "io-util", "net"] }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "hot_path"
+harness = false

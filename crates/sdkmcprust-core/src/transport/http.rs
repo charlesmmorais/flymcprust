@@ -239,7 +239,11 @@ impl StreamableHttpService {
             }
         };
 
+        // A legacy client's `initialize` carries none of the modern headers;
+        // let the server answer it with an error naming the supported
+        // versions (the spec recommends that diagnostic for legacy clients).
         if let Message::Request(request) = &message
+            && request.method != "initialize"
             && let Err(error) = validate_headers(&self.server, &parts.headers, request)
         {
             return rpc_error(

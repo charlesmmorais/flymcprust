@@ -140,6 +140,32 @@ async fn successful_request_returns_json() {
 }
 
 #[tokio::test]
+async fn legacy_initialize_names_the_supported_versions() {
+    // A 2025-11-25 client opens with `initialize` and no modern headers.
+    let body = json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+        "protocolVersion": "2025-11-25", "capabilities": {},
+        "clientInfo": { "name": "legacy", "version": "1" } } });
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/mcp")
+        .header("host", "localhost")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body(Full::new(Bytes::from(body.to_string())))
+        .unwrap();
+    let (status, _, response) = send(&mut service(), request).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let response = response.unwrap();
+    assert_eq!(response["error"]["code"], -32601);
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("2026-07-28")
+    );
+}
+
+#[tokio::test]
 async fn notifications_get_202() {
     let body = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": { "requestId": 1 } });
     let (status, _, response) = send_json(post(&body), &body).await;

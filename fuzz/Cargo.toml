@@ -1,0 +1,41 @@
+# Fuzz targets (cargo-fuzz). Not a member of the main workspace: building
+# needs a nightly toolchain and libFuzzer.
+#
+#   cargo install cargo-fuzz
+#   cd fuzz && cargo +nightly fuzz run parse_message
+#
+# Note: `fuzz_target!` expands to `unsafe` FFI glue, so this harness cannot
+# use `#![forbid(unsafe_code)]`. It is test-only code and is never shipped
+# (see docs/ARCHITECTURE.md §9).
+[package]
+name = "sdkmcprust-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.10"
+sdkmcprust-core = { path = "../crates/sdkmcprust-core" }
+serde_json = "1.0.140"
+tokio = { version = "1.47.0", features = ["rt"] }
+tokio-util = "0.7.15"
+
+[[bin]]
+name = "parse_message"
+path = "fuzz_targets/parse_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handle_message"
+path = "fuzz_targets/handle_message.rs"
+test = false
+doc = false
+bench = false
+
+# Keep this crate out of the parent workspace.
+[workspace]

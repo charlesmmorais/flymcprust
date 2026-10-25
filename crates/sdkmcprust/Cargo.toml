@@ -11,6 +11,9 @@ keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 schemars.workspace = true
 sdkmcprust-core.workspace = true

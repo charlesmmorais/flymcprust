@@ -425,8 +425,14 @@ exception to the safety rules is needed.
 - **Supply chain.** `cargo-deny` checks licenses, advisories, bans and sources;
   `cargo-audit` runs in CI. Spec downloads are verified against a SHA-256
   lock.
-- **Fuzzing.** The `fuzz/` directory holds a `parse_message` target covering
-  the envelope parser, the depth scanner and `_meta` validation.
+- **Fuzzing.** The `fuzz/` directory holds two targets. `parse_message`
+  covers the envelope parser and the depth scanner. `handle_message` covers
+  full request handling: `_meta` validation, dispatch and error mapping. CI
+  runs each one for 60 seconds on nightly.
+- **Documented exception.** The fuzz harness cannot use
+  `#![forbid(unsafe_code)]`, because `libfuzzer-sys`'s `fuzz_target!` expands
+  to `unsafe` FFI glue. It is test-only code outside the workspace and is
+  never shipped.
 
 ## 10. Performance
 
@@ -465,3 +471,5 @@ exception to the safety rules is needed.
 | 2026-10-25 | Own stack instead of building on `rmcp`; explicit registration plus opt-in `inventory` auto-registration; HTTP on `http` + `hyper-util`; custom code generator reading `schema.json` and `schema.ts`. |
 | 2026-10-25 | `McpError` carries an `ErrorKind` so HTTP can choose the status without guessing: malformed requests are `400`, unknown methods `404`, failed-but-valid requests (unknown tool) `200`. Answering `400` for an unknown tool could make a dual-era client fall back to the legacy protocol. |
 | 2026-10-25 | `x-mcp-header` (SEP-2243) is supported in phase 1: annotations are validated at build time, and `Mcp-Param-*` headers are checked against the arguments. |
+| 2026-10-25 | Generated schemas drop schemars' non-standard numeric `format` values (`uint`, `double`, …). They are not JSON Schema 2020-12 formats, clients warn about them (the MCP Inspector does), and they cost model context. |
+| 2026-10-25 | Over HTTP, `initialize` skips header validation and gets `404` + `-32601` with a message naming the supported versions. The spec recommends that diagnostic for legacy clients and requires `404` for unimplemented methods. |

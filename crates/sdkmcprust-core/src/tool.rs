@@ -354,7 +354,35 @@ pub fn schema_for<T: JsonSchema>() -> Map<String, Value> {
     };
     map.remove("$schema");
     map.remove("title");
+    for value in map.values_mut() {
+        strip_nonstandard_formats(value);
+    }
     map
+}
+
+/// Numeric `format` values emitted by schemars that JSON Schema 2020-12 does
+/// not define. Validators ignore (and some warn about) them, and they cost
+/// model context; range keywords such as `minimum` carry the useful part.
+const NONSTANDARD_FORMATS: &[&str] = &[
+    "int", "int8", "int16", "int32", "int64", "int128", "uint", "uint8", "uint16", "uint32",
+    "uint64", "uint128", "float", "double",
+];
+
+fn strip_nonstandard_formats(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map
+                .get("format")
+                .and_then(Value::as_str)
+                .is_some_and(|f| NONSTANDARD_FORMATS.contains(&f))
+            {
+                map.remove("format");
+            }
+            map.values_mut().for_each(strip_nonstandard_formats);
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_nonstandard_formats),
+        _ => {}
+    }
 }
 
 /// Builds a tool `inputSchema` from the JSON Schema of `T`, which must
@@ -419,6 +447,11 @@ mod tests {
         assert_eq!(schema.get("type"), Some(&Value::from("object")));
         assert!(!schema.contains_key("title"));
         assert!(!schema.contains_key("$schema"));
+        // `format: "int32"` is not a JSON Schema 2020-12 format.
+        assert_eq!(
+            schema["properties"]["x"],
+            serde_json::json!({ "type": "integer" })
+        );
     }
 
     #[test]
