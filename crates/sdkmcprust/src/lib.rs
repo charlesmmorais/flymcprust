@@ -43,12 +43,12 @@
 #![forbid(unsafe_code)]
 
 pub use sdkmcprust_core::{
-    BuildError, CompleteFn, Completion, CompletionRequest, Ctx, ErrorKind, Extension, IntoContent,
-    IntoPromptResult, IntoResourceContents, IntoToolError, IntoToolResult, Json, Limits, McpError,
-    McpRequest, MirroredParam, ParamKind, Prompt, PromptArguments, PromptDef, Resource,
-    ResourceContents, ResourceDef, Server, ServerBuilder, State, Tool, ToolDef, ToolError,
-    ToolOutput, ToolResult, TransportContext, UriTemplate, UriTemplateError, UriVars, jsonrpc,
-    message, spec, transport,
+    BuildError, CompleteFn, Completion, CompletionRequest, Ctx, Elicitation, ErrorKind, Extension,
+    IntoContent, IntoPromptResult, IntoResourceContents, IntoToolError, IntoToolResult, Json,
+    Limits, MIN_REQUEST_STATE_KEY_BYTES, McpError, McpRequest, MirroredParam, ParamKind, Prompt,
+    PromptArguments, PromptDef, Resource, ResourceContents, ResourceDef, Server, ServerBuilder,
+    State, Tool, ToolDef, ToolError, ToolOutput, ToolResult, TransportContext, UriTemplate,
+    UriTemplateError, UriVars, jsonrpc, message, spec, transport,
 };
 
 #[cfg(feature = "macros")]

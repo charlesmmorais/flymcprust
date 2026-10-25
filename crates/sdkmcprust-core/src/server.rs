@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use futures_util::FutureExt as _;
 use serde::Deserialize;
-use serde_json::Map;
 use serde_json::value::RawValue;
+use serde_json::{Map, Value};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
@@ -22,6 +22,7 @@ use crate::extension::{self, Extension};
 use crate::jsonrpc::{self, Message, Rejection, Request, Response};
 use crate::limits::Limits;
 use crate::mirror::{self, MirroredParam};
+use crate::mrtr::{Args, MIN_REQUEST_STATE_KEY_BYTES, Round, RoundKey, StateCodec};
 use crate::prompt::{GetFn, Prompt, PromptArguments, PromptDef};
 use crate::resource::{ReadFn, Resource, ResourceDef, ResourceKind};
 use crate::spec::{self, CacheScope, RequestId, methods};
@@ -88,6 +89,13 @@ pub enum BuildError {
     /// A limit is out of range.
     #[error("invalid limit: {0}")]
     InvalidLimit(&'static str),
+    /// The `requestState` signing key is shorter than
+    /// [`MIN_REQUEST_STATE_KEY_BYTES`].
+    #[error("the requestState key must be at least {MIN_REQUEST_STATE_KEY_BYTES} bytes")]
+    WeakRequestStateKey,
+    /// No random `requestState` key could be generated.
+    #[error("could not generate a random requestState key: {0}")]
+    RandomUnavailable(String),
     /// A pre-serialized response could not be built.
     #[error("could not serialize {0}")]
     Serialize(&'static str, #[source] serde_json::Error),
@@ -108,6 +116,8 @@ pub struct ServerBuilder {
     discover_ttl: Duration,
     cache_scope: CacheScope,
     include_server_info: bool,
+    request_state_key: Option<Vec<u8>>,
+    request_state_ttl: Duration,
 }
 
 impl std::fmt::Debug for ServerBuilder {
@@ -138,6 +148,8 @@ impl ServerBuilder {
             discover_ttl: Duration::from_secs(3600),
             cache_scope: CacheScope::Public,
             include_server_info: true,
+            request_state_key: None,
+            request_state_ttl: Duration::from_secs(600),
         }
     }
 
@@ -286,6 +298,23 @@ impl ServerBuilder {
         self
     }
 
+    /// Secret key that signs `requestState` (HMAC-SHA256), at least
+    /// [`MIN_REQUEST_STATE_KEY_BYTES`] bytes. Default: a random key per
+    /// process, which is enough for a single instance. Set the same key on
+    /// every instance when requests may be retried on another instance
+    /// (load balancing), and keep it secret.
+    pub fn request_state_key(mut self, key: impl Into<Vec<u8>>) -> Self {
+        self.request_state_key = Some(key.into());
+        self
+    }
+
+    /// How long a client may take to answer an input request (the lifetime
+    /// of `requestState`). Default: 10 minutes.
+    pub fn request_state_ttl(mut self, ttl: Duration) -> Self {
+        self.request_state_ttl = ttl;
+        self
+    }
+
     /// Whether results carry `io.modelcontextprotocol/serverInfo` in `_meta`
     /// (recommended by the specification). Default: `true`.
     pub fn include_server_info(mut self, include: bool) -> Self {
@@ -343,6 +372,20 @@ impl ServerBuilder {
             })?;
             mirrored.push(params);
         }
+
+        let state_key = match self.request_state_key {
+            Some(key) if key.len() < MIN_REQUEST_STATE_KEY_BYTES => {
+                return Err(BuildError::WeakRequestStateKey);
+            }
+            Some(key) => key,
+            None => {
+                let mut key = vec![0; MIN_REQUEST_STATE_KEY_BYTES];
+                getrandom::fill(&mut key)
+                    .map_err(|e| BuildError::RandomUnavailable(e.to_string()))?;
+                key
+            }
+        };
+        let state_codec = StateCodec::new(state_key, self.request_state_ttl);
 
         let resources = build_resources(self.resources, &self.state)?;
         let prompts = build_prompts(self.prompts, &self.state)?;
@@ -465,6 +508,7 @@ impl ServerBuilder {
                 templates: resources.templates,
                 prompts: prompts.registry,
                 has_completions,
+                state_codec,
                 discover,
                 tools_list,
                 resources_list,
@@ -499,6 +543,7 @@ struct Inner {
     /// Sorted by name.
     prompts: Box<[RegisteredPrompt]>,
     has_completions: bool,
+    state_codec: StateCodec,
     discover: Box<RawValue>,
     tools_list: Box<RawValue>,
     resources_list: Option<Box<RawValue>>,
@@ -857,9 +902,16 @@ impl Server {
             methods::TOOLS_CALL => {
                 let p: CallParams<'_> = parse_params(params)?;
                 let meta = self.validate_meta(p.meta)?;
-                let ctx = self.ctx(req.id, meta, &cancellation, transport);
+                let key = RoundKey {
+                    method: methods::TOOLS_CALL,
+                    target: &p.name,
+                    arguments: p.arguments.map_or(Args::None, |a| Args::Raw(a.get())),
+                };
+                let round = self.round(&key, p.input_responses, p.request_state.as_deref())?;
+                let ctx = self.ctx(req.id, meta, &cancellation, transport, &round);
                 self.call_tool(&p.name, p.arguments, ctx, &cancellation)
                     .await
+                    .or_else(|e| self.input_required(e, &round, &key))
             }
             methods::RESOURCES_LIST => {
                 self.list(&req.method, params, self.inner.resources_list.as_deref())
@@ -870,8 +922,16 @@ impl Server {
             methods::RESOURCES_READ if self.inner.resources_list.is_some() => {
                 let p: ReadParams<'_> = parse_params(params)?;
                 let meta = self.validate_meta(p.meta)?;
-                let ctx = self.ctx(req.id, meta, &cancellation, transport);
-                self.read_resource(&p.uri, ctx, &cancellation).await
+                let key = RoundKey {
+                    method: methods::RESOURCES_READ,
+                    target: &p.uri,
+                    arguments: Args::None,
+                };
+                let round = self.round(&key, p.input_responses, p.request_state.as_deref())?;
+                let ctx = self.ctx(req.id, meta, &cancellation, transport, &round);
+                self.read_resource(&p.uri, ctx, &cancellation)
+                    .await
+                    .or_else(|e| self.input_required(e, &round, &key))
             }
             methods::PROMPTS_LIST => {
                 self.list(&req.method, params, self.inner.prompts_list.as_deref())
@@ -879,10 +939,17 @@ impl Server {
             methods::PROMPTS_GET if self.inner.prompts_list.is_some() => {
                 let p: GetPromptParams = parse_params(params)?;
                 let meta = self.validate_meta(p.meta)?;
-                let ctx = self.ctx(req.id, meta, &cancellation, transport);
                 let arguments = PromptArguments::new(p.arguments.unwrap_or_default());
+                let key = RoundKey {
+                    method: methods::PROMPTS_GET,
+                    target: &p.name,
+                    arguments: Args::Map(arguments.as_map()),
+                };
+                let round = self.round(&key, p.input_responses, p.request_state.as_deref())?;
+                let ctx = self.ctx(req.id, meta, &cancellation, transport, &round);
                 self.get_prompt(&p.name, &arguments, ctx, &cancellation)
                     .await
+                    .or_else(|e| self.input_required(e, &round, &key))
             }
             methods::COMPLETION_COMPLETE if self.inner.has_completions => {
                 let mut p: CompleteParams = parse_params(params)?;
@@ -952,6 +1019,7 @@ impl Server {
         meta: RequestMeta,
         cancellation: &CancellationToken,
         transport: TransportContext,
+        round: &Arc<Round>,
     ) -> Ctx {
         Ctx::new(
             id,
@@ -959,7 +1027,39 @@ impl Server {
             cancellation.clone(),
             transport,
             Arc::clone(&self.inner.state),
+            Some(Arc::clone(round)),
         )
+    }
+
+    /// Starts an MRTR round: verifies `requestState` and collects answers.
+    fn round(
+        &self,
+        key: &RoundKey<'_>,
+        input_responses: Option<Value>,
+        request_state: Option<&str>,
+    ) -> Result<Arc<Round>, McpError> {
+        Round::start(&self.inner.state_codec, key, input_responses, request_state).map(Arc::new)
+    }
+
+    /// Turns the "input required" signal into an `InputRequiredResult`;
+    /// other errors pass through.
+    fn input_required(
+        &self,
+        error: HandlerError,
+        round: &Round,
+        key: &RoundKey<'_>,
+    ) -> Result<Option<Box<RawValue>>, McpError> {
+        match error {
+            HandlerError::InputRequired => {
+                let result = round.input_required(
+                    &self.inner.state_codec,
+                    key,
+                    self.inner.result_meta.as_ref(),
+                )?;
+                to_raw(&result).map(Some).map_err(|_| McpError::internal())
+            }
+            HandlerError::Rpc(error) => Err(error),
+        }
     }
 
     /// Runs a handler future under the concurrency limit, the timeout and
@@ -1002,7 +1102,7 @@ impl Server {
         arguments: Option<&RawValue>,
         ctx: Ctx,
         cancellation: &CancellationToken,
-    ) -> Result<Option<Box<RawValue>>, McpError> {
+    ) -> Result<Option<Box<RawValue>>, HandlerError> {
         let tool = self
             .find_tool(name)
             .ok_or_else(|| McpError::unknown_tool(name))?;
@@ -1017,17 +1117,18 @@ impl Server {
 
         let mut result = match outcome {
             Ok(ToolOutput::Complete(result)) => result,
+            Err(error) if error.is_input_required() => return Err(HandlerError::InputRequired),
             Err(error) => match error.into_protocol() {
-                Ok(protocol_error) => return Err(protocol_error),
+                Ok(protocol_error) => return Err(protocol_error.into()),
                 Err(error) => error.into_call_result(&tool.name),
             },
         };
         result.result_type = COMPLETE.to_owned();
         self.with_server_info(&mut result.meta);
-        to_raw(&result).map(Some).map_err(|error| {
+        Ok(to_raw(&result).map(Some).map_err(|error| {
             tracing::error!(tool = %tool.name, %error, "failed to serialize tool result");
             McpError::internal()
-        })
+        })?)
     }
 
     /// Finds the handler for a URI: an exact static resource first, then the
@@ -1054,7 +1155,7 @@ impl Server {
         uri: &str,
         ctx: Ctx,
         cancellation: &CancellationToken,
-    ) -> Result<Option<Box<RawValue>>, McpError> {
+    ) -> Result<Option<Box<RawValue>>, HandlerError> {
         let (read, vars, ttl_ms, cache_scope) = self
             .find_resource(uri)
             .ok_or_else(|| McpError::resource_not_found(uri))?;
@@ -1065,14 +1166,14 @@ impl Server {
                 Some(outcome) => outcome,
             },
         };
-        let contents = outcome.map_err(|e| e.into_rpc_error("resource", Some(uri)))?;
+        let contents = outcome.map_err(|e| HandlerError::from_tool(e, "resource", Some(uri)))?;
         let mut result =
             spec::ReadResourceResult::new(cache_scope, contents, COMPLETE.to_owned(), ttl_ms);
         self.with_server_info(&mut result.meta);
-        to_raw(&result).map(Some).map_err(|error| {
+        Ok(to_raw(&result).map(Some).map_err(|error| {
             tracing::error!(uri, %error, "failed to serialize resource contents");
             McpError::internal()
-        })
+        })?)
     }
 
     fn find_prompt(&self, name: &str) -> Option<&RegisteredPrompt> {
@@ -1089,7 +1190,7 @@ impl Server {
         arguments: &PromptArguments,
         ctx: Ctx,
         cancellation: &CancellationToken,
-    ) -> Result<Option<Box<RawValue>>, McpError> {
+    ) -> Result<Option<Box<RawValue>>, HandlerError> {
         let prompt = self
             .find_prompt(name)
             .ok_or_else(|| McpError::unknown_prompt(name))?;
@@ -1100,16 +1201,16 @@ impl Server {
                 Some(outcome) => outcome,
             },
         };
-        let mut result = outcome.map_err(|e| e.into_rpc_error(&prompt.name, None))?;
+        let mut result = outcome.map_err(|e| HandlerError::from_tool(e, &prompt.name, None))?;
         result.result_type = COMPLETE.to_owned();
         if result.description.is_none() {
             result.description.clone_from(&prompt.description);
         }
         self.with_server_info(&mut result.meta);
-        to_raw(&result).map(Some).map_err(|error| {
+        Ok(to_raw(&result).map(Some).map_err(|error| {
             tracing::error!(prompt = %prompt.name, %error, "failed to serialize prompt");
             McpError::internal()
-        })
+        })?)
     }
 
     fn complete(&self, p: CompleteParams) -> Result<Box<RawValue>, McpError> {
@@ -1192,6 +1293,10 @@ struct CallParams<'a> {
     name: String,
     #[serde(borrow, default)]
     arguments: Option<&'a RawValue>,
+    #[serde(rename = "inputResponses", default)]
+    input_responses: Option<Value>,
+    #[serde(rename = "requestState", default)]
+    request_state: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1200,6 +1305,10 @@ struct ReadParams<'a> {
     meta: Option<spec::RequestMetaObject>,
     #[serde(borrow)]
     uri: std::borrow::Cow<'a, str>,
+    #[serde(rename = "inputResponses", default)]
+    input_responses: Option<Value>,
+    #[serde(rename = "requestState", default)]
+    request_state: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1209,6 +1318,34 @@ struct GetPromptParams {
     name: String,
     #[serde(default)]
     arguments: Option<BTreeMap<String, String>>,
+    #[serde(rename = "inputResponses", default)]
+    input_responses: Option<Value>,
+    #[serde(rename = "requestState", default)]
+    request_state: Option<String>,
+}
+
+/// The failure of a handler that supports multi round-trip requests.
+enum HandlerError {
+    /// The handler asked the client for input.
+    InputRequired,
+    /// A JSON-RPC error.
+    Rpc(McpError),
+}
+
+impl HandlerError {
+    fn from_tool(error: ToolError, handler: &str, uri: Option<&str>) -> Self {
+        if error.is_input_required() {
+            Self::InputRequired
+        } else {
+            Self::Rpc(error.into_rpc_error(handler, uri))
+        }
+    }
+}
+
+impl From<McpError> for HandlerError {
+    fn from(error: McpError) -> Self {
+        Self::Rpc(error)
+    }
 }
 
 #[derive(Deserialize)]

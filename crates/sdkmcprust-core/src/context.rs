@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::mrtr::Round;
 use crate::spec::{self, RequestId};
 
 /// A small type map: at most one value per type.
@@ -92,6 +93,7 @@ struct CtxInner {
     cancellation: CancellationToken,
     transport: TransportContext,
     state: Arc<TypeMap>,
+    round: Option<Arc<Round>>,
 }
 
 impl Ctx {
@@ -101,6 +103,7 @@ impl Ctx {
         cancellation: CancellationToken,
         transport: TransportContext,
         state: Arc<TypeMap>,
+        round: Option<Arc<Round>>,
     ) -> Self {
         Self {
             inner: Arc::new(CtxInner {
@@ -109,8 +112,14 @@ impl Ctx {
                 cancellation,
                 transport,
                 state,
+                round,
             }),
         }
+    }
+
+    /// MRTR data, for `tools/call`, `resources/read` and `prompts/get`.
+    pub(crate) fn round(&self) -> Option<&Round> {
+        self.inner.round.as_deref()
     }
 
     /// The JSON-RPC id of the request.

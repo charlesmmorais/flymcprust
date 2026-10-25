@@ -16,6 +16,7 @@ mod extension;
 pub mod jsonrpc;
 mod limits;
 mod mirror;
+mod mrtr;
 mod prompt;
 mod resource;
 mod server;
@@ -34,6 +35,7 @@ pub use error::{ErrorKind, McpError};
 pub use extension::Extension;
 pub use limits::{Limits, MAX_SUPPORTED_JSON_DEPTH};
 pub use mirror::{MirroredParam, ParamKind};
+pub use mrtr::{Elicitation, MIN_REQUEST_STATE_KEY_BYTES};
 pub use prompt::{
     GetFn, IntoContent, IntoPromptResult, Prompt, PromptArguments, PromptDef, PromptFuture, message,
 };

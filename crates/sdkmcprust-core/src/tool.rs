@@ -108,6 +108,8 @@ pub struct ToolError {
 enum ToolErrorKind {
     User(Cow<'static, str>),
     NotFound,
+    /// The handler asked the client for input (MRTR); see `Ctx::elicit`.
+    InputRequired,
     Protocol(McpError),
     InvalidArguments(String),
     Internal(Box<dyn std::error::Error + Send + Sync + 'static>),
@@ -176,6 +178,16 @@ impl ToolError {
         }
     }
 
+    pub(crate) fn input_required() -> Self {
+        Self {
+            kind: ToolErrorKind::InputRequired,
+        }
+    }
+
+    pub(crate) fn is_input_required(&self) -> bool {
+        matches!(self.kind, ToolErrorKind::InputRequired)
+    }
+
     pub(crate) fn timeout() -> Self {
         Self {
             kind: ToolErrorKind::Timeout,
@@ -202,6 +214,10 @@ impl ToolError {
         let message: Cow<'static, str> = match self.kind {
             ToolErrorKind::User(message) => message,
             ToolErrorKind::NotFound => Cow::Borrowed("Not found."),
+            ToolErrorKind::InputRequired => {
+                tracing::error!(tool, "input required outside a multi round-trip request");
+                Cow::Borrowed("The tool failed because of an internal error.")
+            }
             ToolErrorKind::Protocol(error) => Cow::Owned(error.message().to_owned()),
             ToolErrorKind::InvalidArguments(details) => {
                 Cow::Owned(format!("Invalid arguments: {details}"))
@@ -237,6 +253,10 @@ impl ToolError {
                 None => McpError::request_failed("Not found"),
             },
             ToolErrorKind::Protocol(error) => error,
+            ToolErrorKind::InputRequired => {
+                tracing::error!(handler, "input required outside a multi round-trip request");
+                McpError::internal()
+            }
             ToolErrorKind::InvalidArguments(details) => {
                 McpError::request_failed(format!("Invalid arguments: {details}"))
             }
@@ -261,6 +281,7 @@ impl fmt::Debug for ToolError {
         match &self.kind {
             ToolErrorKind::User(m) => f.debug_tuple("User").field(m).finish(),
             ToolErrorKind::NotFound => f.write_str("NotFound"),
+            ToolErrorKind::InputRequired => f.write_str("InputRequired"),
             ToolErrorKind::Protocol(e) => f.debug_tuple("Protocol").field(e).finish(),
             ToolErrorKind::InvalidArguments(m) => {
                 f.debug_tuple("InvalidArguments").field(m).finish()
@@ -277,6 +298,7 @@ impl fmt::Display for ToolError {
         match &self.kind {
             ToolErrorKind::User(m) => f.write_str(m),
             ToolErrorKind::NotFound => f.write_str("not found"),
+            ToolErrorKind::InputRequired => f.write_str("input required"),
             ToolErrorKind::Protocol(e) => write!(f, "protocol error: {e}"),
             ToolErrorKind::InvalidArguments(m) => write!(f, "invalid arguments: {m}"),
             ToolErrorKind::Internal(e) => write!(f, "internal error: {e}"),
