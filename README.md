@@ -9,12 +9,14 @@ FAST · SAFE · SIMPLE · STATELESS
 > Build [Model Context Protocol](https://modelcontextprotocol.io) servers
 > with the ergonomics of FastMCP and the guarantees of Rust.
 
-**Status:** complete MCP server SDK for protocol 2026-07-28 (all 147 checks
-of the official conformance suite pass) that also serves 2025-11-25 and
-2025-06-18 clients: tools, resources, prompts, completion, multi round-trip
-requests, progress and logging, MCP Apps interfaces, over stdio and
-Streamable HTTP, with OAuth 2.1 authorization on HTTP. Next: the first release; see the
-[roadmap](docs/ROADMAP.md). Not published on crates.io yet.
+**Status:** version 0.1.0, a complete MCP server SDK for protocol
+2026-07-28 (all 147 checks of the official conformance suite pass) that also
+serves 2025-11-25 and 2025-06-18 clients: tools, resources, prompts,
+completion, multi round-trip requests, progress and logging, MCP Apps
+interfaces, over stdio and Streamable HTTP, with OAuth 2.1 authorization on
+HTTP. On [crates.io](https://crates.io/crates/flymcprust), with API
+documentation on [docs.rs](https://docs.rs/flymcprust); see the
+[changelog](CHANGELOG.md) and the [roadmap](docs/ROADMAP.md).
 
 - **Spec-first.** Targets MCP revision **2026-07-28**: stateless, with no
   `initialize` and no sessions. Clients of 2025-11-25 and 2025-06-18 work too,
@@ -39,7 +41,7 @@ New to MCP or to this SDK? Follow
 
 ```toml
 [dependencies]
-flymcprust = { git = "…", features = ["stdio"] }
+flymcprust = { version = "0.1", features = ["stdio"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

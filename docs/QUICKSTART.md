@@ -17,15 +17,12 @@ cd hello-mcp
 ```
 
 ```bash
-cargo add flymcprust --git https://github.com/charlesmmorais/flymcprust --features stdio,logging
+cargo add flymcprust --features stdio,logging
 ```
 
 ```bash
 cargo add tokio --features macros,rt-multi-thread
 ```
-
-The SDK is not on crates.io yet; once it is, the third command becomes
-`cargo add flymcprust --features stdio,logging`.
 
 ## 2. Write a tool (1 minute)
 
@@ -187,7 +184,7 @@ WARN a client that did not declare the needed capability called a handler that a
 ## 5. Test it (1 minute)
 
 ```bash
-cargo add flymcprust --dev --git https://github.com/charlesmmorais/flymcprust --features test-client
+cargo add flymcprust --dev --features test-client
 ```
 
 ```bash
