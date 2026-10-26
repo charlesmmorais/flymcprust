@@ -17,7 +17,7 @@ cd hello-mcp
 ```
 
 ```bash
-cargo add flymcprust --git https://github.com/charlesmmorais/sdkmcprust --features stdio,logging
+cargo add flymcprust --git https://github.com/charlesmmorais/flymcprust --features stdio,logging
 ```
 
 ```bash
@@ -187,7 +187,7 @@ WARN a client that did not declare the needed capability called a handler that a
 ## 5. Test it (1 minute)
 
 ```bash
-cargo add flymcprust --dev --git https://github.com/charlesmmorais/sdkmcprust --features test-client
+cargo add flymcprust --dev --git https://github.com/charlesmmorais/flymcprust --features test-client
 ```
 
 ```bash
