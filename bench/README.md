@@ -17,9 +17,9 @@ RS256 JWT ([`fixtures/token.txt`](fixtures/token.txt), verified against
 same release profile (`lto = "thin"`, `codegen-units = 1`) and hyper's
 HTTP/1.1 server.
 
-Results: [results/RESULTS.md](results/RESULTS.md) (Windows laptop) and
-[results/linux-ci/RESULTS.md](results/linux-ci/RESULTS.md) (Linux GitHub
-Actions runner), with raw data next to each.
+Results, with raw data next to each: [x86-64](results/2026-10-26-x86_64/RESULTS.md)
+and [ARM64](results/2026-10-26-aarch64/RESULTS.md) GitHub Actions runners
+(2026-10-26); earlier runs in [results/archive](results/archive).
 
 ## Run it
 

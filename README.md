@@ -432,33 +432,57 @@ async fn adds() {
 ### Against rmcp and the official Python SDK
 
 [`bench/`](bench) runs the same server (same tools, MCP 2026-07-28,
-Streamable HTTP/1.1, JSON responses) written with FlyMCPRust, `rmcp` 3.7.0
-and the official Python SDK `mcp` 2.3.0, under one load generator. Full
-tables, method and caveats: [bench/results/RESULTS.md](bench/results/RESULTS.md).
+stateless) written with FlyMCPRust, `rmcp` 3.7.0 and the official Python SDK
+`mcp` 2.3.0, over Streamable HTTP/1.1 and stdio, under one load generator.
+Latest run (2026-10-26, GitHub Actions, 4-core runners, server and load
+generator on separate CPUs, median of 3 runs, 0 errors):
+[x86-64](bench/results/2026-10-26-x86_64/RESULTS.md) (AMD EPYC) and
+[ARM64](bench/results/2026-10-26-aarch64/RESULTS.md) (Neoverse-N2).
 
-At 64 concurrent clients (laptop, load generator on the same machine,
-2026-10-25):
+Streamable HTTP, 64 concurrent clients, x86-64:
 
-| Scenario | FlyMCPRust req/s | rmcp req/s | Python req/s | CPU per request vs rmcp | vs Python |
+| Scenario | FlyMCPRust req/s | rmcp req/s | Python req/s | vs rmcp | vs Python |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `tools/list` | 79,051 | 42,164 | 2,024 | 2.3× less | 9.3× less |
-| `tools/call` (trivial tool) | 59,920 | 37,156 | 1,816 | 2.6× less | 9.8× less |
-| `tools/call` (structured output) | 58,258 | 35,098 | 1,702 | 2.3× less | 8.7× less |
-| `tools/call` (64 KiB in and out) | 20,442 | 19,983 | 920 | 1.1× less | 3.8× less |
+| `tools/list` | 165,345 | 54,108 | 4,066 | 3.1× | 41× |
+| `tools/call` (trivial tool) | 146,494 | 44,731 | 3,068 | 3.3× | 48× |
+| `tools/call` (structured output) | 91,940 | 36,370 | 2,716 | 2.5× | 34× |
+| `tools/call` (64 KiB in and out) | 18,118 | 16,759 | 1,679 | 1.1× | 11× |
 
-Idle memory: 5.9 MiB (rmcp 6.3 MiB, Python 78 MiB). Binary: 1.9 MiB (rmcp
-3.4 MiB). Large payloads are on par with rmcp: the time goes into JSON
-parsing and serialization, which both SDKs share through `serde_json`.
+stdio, 64 requests in flight, x86-64:
 
-On Linux (GitHub Actions runner, Intel Xeon, 4 cores, same suite), the gap
-is wider: 2.4–2.6× the throughput of rmcp with 3.2–4.1× less CPU per request
-on small messages, and 48–64× the throughput of the Python SDK. Idle memory:
-4.2 MiB (rmcp 5.1 MiB, Python 73 MiB). Full tables:
-[bench/results/linux-ci/RESULTS.md](bench/results/linux-ci/RESULTS.md).
-Shared runners vary from run to run; compare servers within one run.
+| Scenario | FlyMCPRust req/s | rmcp req/s | Python req/s | vs rmcp | vs Python |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `tools/list` | 261,753 | 23,816 | 2,630 | 11× | 100× |
+| `tools/call` (trivial tool) | 235,138 | 25,307 | 2,319 | 9.3× | 101× |
+| `tools/call` (structured output) | 134,121 | 22,368 | 2,148 | 6.0× | 62× |
+| `tools/call` (64 KiB in and out) | 10,989 | 4,500 | 1,684 | 2.4× | 6.5× |
 
-Reproduce with `cargo run --release --manifest-path bench/Cargo.toml -p
-mcp-load -- suite` (see [bench/README.md](bench/README.md)).
+- **CPU per request** falls in the same proportion (2.5–3.3× less than rmcp
+  over HTTP on small messages, 5–9× over stdio), and **memory under load** is
+  2.5–3× lower than rmcp's over HTTP (17.6 MiB against 44.7 MiB for the
+  trivial tool).
+- **High concurrency**: at 1,024 clients FlyMCPRust keeps 97–100% of its
+  64-client throughput.
+- **ARM64** shows the same picture: 2.9–4.8× rmcp over HTTP and 3.1–6.2× over
+  stdio on small messages.
+- **Large payloads** are on par with rmcp over HTTP (1.0–1.1×): the time goes
+  into JSON parsing and serialization, which both SDKs share through
+  `serde_json`.
+- **OAuth has a real cost.** Verifying an RS256 token on every request takes
+  the trivial tool from 146,494 to 44,964 req/s (31 ms more CPU per 1,000
+  requests): the signature check dominates. That is about what rmcp does
+  *without* authentication; a comparison with authentication on both SDKs
+  is the next benchmark.
+- **Startup, idle memory and binary size** are close to rmcp's (about 4 ms,
+  5 MiB and 4.8 MiB; rmcp 4.3 MiB); Python needs 0.8 s and 73 MiB.
+
+These are protocol-overhead benchmarks: the tools do almost nothing, so in
+a real server, tool work (database, network) narrows the gaps. Shared
+runners vary from run to run (the spread column of the full tables shows by
+how much; 0–5% here). Reproduce with the commands in
+[bench/README.md](bench/README.md), which also explains the method and how
+to send independent results. Earlier runs are kept in
+[bench/results/archive](bench/results/archive).
 
 ### Micro-benchmarks
 

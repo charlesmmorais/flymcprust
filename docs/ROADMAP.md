@@ -14,7 +14,7 @@ servers and competes on simplicity, efficiency and security.
 | 1 | Spec-generated types (2026-07-28), stateless runtime, stdio and Streamable HTTP, `#[tool]`, test client, benchmarks, fuzzing, official conformance suite in CI |
 | 2 | `#[resource]` (URI templates), `#[prompt]`, completion, multi round-trip requests with signed `requestState` |
 | Security review | 9 findings fixed with regression tests ([SECURITY.md](SECURITY.md)) |
-| 3 | Comparative benchmarks against `rmcp` and the official Python SDK ([bench/results/RESULTS.md](../bench/results/RESULTS.md)) |
+| 3 | Comparative benchmarks against `rmcp` and the official Python SDK ([bench/results](../bench/results)) |
 | DX | 5-minute quickstart, fix-it hints in errors |
 | 4 | Clients of 2025-11-25 and 2025-06-18: `initialize`, signed sessions, input requests as server-to-client requests |
 | 5 | Progress (`ctx.progress`), logging (`ctx.log`, deprecated), SSE response streaming; 147/147 checks of the 2026-07-28 conformance suite, 76/78 of 2025-11-25 |
@@ -42,8 +42,14 @@ indicative only; the numbers that matter come from a quiet, dedicated machine.
 First results (laptop, 64 clients): 1.6–1.9× the throughput of `rmcp` with
 2.3–2.6× less CPU per request on small messages, parity on 64 KiB payloads,
 and 22–39× the throughput of the Python SDK. On a Linux CI runner: 2.4–2.6×
-rmcp's throughput with 3.2–4.1× less CPU on small messages. Next steps: add the stdio transport, and look for the remaining cost on
-large payloads (several `serde_json` passes over the same message).
+rmcp's throughput with 3.2–4.1× less CPU on small messages.
+
+Validation run (2026-10-26, x86-64 and ARM64 runners, separate CPUs for
+server and load generator, median of 3 runs): 2.5–3.3× rmcp over HTTP and
+6–11× over stdio on small messages, parity on 64 KiB payloads; the stdio
+run found and fixed a write bottleneck (13× on small messages). Next:
+real-world scenarios (authentication on both SDKs, 200 tools, 4,096
+connections, complex payloads, external calls, mixed load).
 
 ### 4. Compatibility with 2025-11-25 clients (done)
 
