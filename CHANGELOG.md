@@ -5,7 +5,7 @@ All notable changes to FlyMCPRust are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (before 1.0, minor versions may
 break the API).
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-26
 
 First release: a high-performance MCP server SDK for Rust, targeting
 protocol revision 2026-07-28.
