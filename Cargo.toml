@@ -8,17 +8,17 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-authors = ["The SDKMCPRust contributors"]
+authors = ["The MCPSDKRust contributors"]
 keywords = ["mcp", "model-context-protocol", "sdk", "ai", "llm"]
 categories = ["network-programming", "asynchronous", "api-bindings"]
 publish = false
 
 [workspace.dependencies]
 # Internal crates.
-sdkmcprust = { path = "crates/sdkmcprust", version = "0.1.0" }
-sdkmcprust-core = { path = "crates/sdkmcprust-core", version = "0.1.0" }
-sdkmcprust-macros = { path = "crates/sdkmcprust-macros", version = "0.1.0" }
-sdkmcprust-spec = { path = "crates/sdkmcprust-spec", version = "0.1.0" }
+mcpsdkrust = { path = "crates/mcpsdkrust", version = "0.1.0" }
+mcpsdkrust-core = { path = "crates/mcpsdkrust-core", version = "0.1.0" }
+mcpsdkrust-macros = { path = "crates/mcpsdkrust-macros", version = "0.1.0" }
+mcpsdkrust-spec = { path = "crates/mcpsdkrust-spec", version = "0.1.0" }
 
 # External crates.
 base64 = "0.22.1"

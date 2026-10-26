@@ -1,0 +1,22 @@
+[package]
+name = "mcpsdkrust-spec"
+description = "Model Context Protocol types generated from the official schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[lib]
+# Generated docs quote the specification, including non-Rust code blocks.
+doctest = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

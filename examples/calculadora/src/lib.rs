@@ -5,9 +5,9 @@
 //! `cargo run -p calculadora -- --http 127.0.0.1:8000` (Streamable HTTP).
 #![forbid(unsafe_code)]
 
+use mcpsdkrust::prelude::*;
+use mcpsdkrust::{BuildError, ServerBuilder};
 use schemars::JsonSchema;
-use sdkmcprust::prelude::*;
-use sdkmcprust::{BuildError, ServerBuilder};
 use serde::Serialize;
 
 /// Rejects results JSON cannot represent (infinities, NaN).

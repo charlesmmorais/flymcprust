@@ -5,8 +5,8 @@
 use std::sync::OnceLock;
 
 use libfuzzer_sys::fuzz_target;
-use sdkmcprust_core::TokenVerifier as _;
-use sdkmcprust_core::auth::JwtVerifier;
+use mcpsdkrust_core::TokenVerifier as _;
+use mcpsdkrust_core::auth::JwtVerifier;
 
 /// Public keys from the RFC 8037 and RFC 7517 examples. Their private
 /// halves are published, but a fuzzer cannot compute signatures.

@@ -366,11 +366,11 @@ fn targets(root: &Path) -> Vec<Target> {
             artifact: release.join(exe(bin)),
         };
     vec![
-        rust("sdkmcprust", "bench-sdkmcprust", 8101, vec![]),
+        rust("mcpsdkrust", "bench-mcpsdkrust", 8101, vec![]),
         rust("rmcp", "bench-rmcp", 8102, vec![]),
         rust(
-            "sdkmcprust (1 thread)",
-            "bench-sdkmcprust",
+            "mcpsdkrust (1 thread)",
+            "bench-mcpsdkrust",
             8104,
             vec![("TOKIO_WORKER_THREADS", "1")],
         ),

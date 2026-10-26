@@ -1,4 +1,4 @@
-# Comparative benchmarks (SDKMCPRust vs rmcp vs the official Python SDK).
+# Comparative benchmarks (MCPSDKRust vs rmcp vs the official Python SDK).
 # Runs weekly and on demand; results are uploaded as an artifact. Shared CI
 # runners are noisy: use these runs to spot regressions, and a quiet machine
 # for published numbers (see bench/README.md).

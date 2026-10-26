@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Conventions for working on SDKMCPRust, a Rust SDK for Model Context Protocol
+Conventions for working on MCPSDKRust, a Rust SDK for Model Context Protocol
 servers. Read `docs/ARCHITECTURE.md` before making design changes.
 
 ## Language
@@ -15,7 +15,7 @@ servers. Read `docs/ARCHITECTURE.md` before making design changes.
 - Do not rely on prior knowledge of MCP. Check the spec pages, `schema.ts` and
   `schema.json` for the pinned revision. If the code and the spec disagree, the
   spec wins: fix the code and note the change in the ARCHITECTURE decision log.
-- Never edit generated files under `crates/sdkmcprust-spec/src/v*/` by hand.
+- Never edit generated files under `crates/mcpsdkrust-spec/src/v*/` by hand.
   Change the generator (`xtask/`) or the overrides
   (`xtask/overrides/<revision>.toml`), then run `cargo xtask codegen`.
 
@@ -23,10 +23,10 @@ servers. Read `docs/ARCHITECTURE.md` before making design changes.
 
 | Path | Purpose |
 | --- | --- |
-| `crates/sdkmcprust-spec` | Generated protocol types (one module per revision) |
-| `crates/sdkmcprust-core` | Runtime and transports (features: `stdio`, `http`, `test-client`) |
-| `crates/sdkmcprust-macros` | `#[tool]`, `#[resource]` and `#[prompt]` macros |
-| `crates/sdkmcprust` | Facade crate; the only crate users depend on |
+| `crates/mcpsdkrust-spec` | Generated protocol types (one module per revision) |
+| `crates/mcpsdkrust-core` | Runtime and transports (features: `stdio`, `http`, `test-client`) |
+| `crates/mcpsdkrust-macros` | `#[tool]`, `#[resource]` and `#[prompt]` macros |
+| `crates/mcpsdkrust` | Facade crate; the only crate users depend on |
 | `xtask` | `cargo xtask fetch-spec <rev>` and `cargo xtask codegen [--check]` |
 | `examples/calculadora` | Example server |
 | `examples/conformance-server` | Fixtures for the official conformance suite (`conformance-baseline.yml`) |
@@ -70,8 +70,8 @@ Other useful commands:
 ```bash
 cargo +1.88 check --workspace --all-features     # MSRV
 cargo xtask codegen --check                      # generated code is fresh
-cargo bench -p sdkmcprust-core                   # benchmarks
-TRYBUILD=overwrite cargo test -p sdkmcprust --test ui   # refresh macro UI snapshots, then review the diff
+cargo bench -p mcpsdkrust-core                   # benchmarks
+TRYBUILD=overwrite cargo test -p mcpsdkrust --test ui   # refresh macro UI snapshots, then review the diff
 ```
 
 ## Workflow

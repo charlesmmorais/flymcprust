@@ -9,14 +9,14 @@ publish = false
 
 [dependencies]
 schemars.workspace = true
-sdkmcprust = { workspace = true, features = ["stdio", "http", "logging"] }
+mcpsdkrust = { workspace = true, features = ["stdio", "http", "logging"] }
 serde.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing.workspace = true
 
 [dev-dependencies]
 rmcp = { version = "3.7.0", default-features = false, features = ["client", "transport-child-process"] }
-sdkmcprust = { workspace = true, features = ["test-client"] }
+mcpsdkrust = { workspace = true, features = ["test-client"] }
 serde_json.workspace = true
 
 [lints]

@@ -31,7 +31,7 @@ lines += [
     f"cores, {m['memory_gib']:.0f} GiB, {m['os']}. Each point: {data['warmup_s']:.0f} s warm-up, "
     f"{data['duration_s']:.0f} s measured. The load generator runs on the same machine.",
     "",
-    f"Versions: SDKMCPRust (this repository), rmcp 3.7.0, mcp 2.3.0 ({data.get('python') or 'Python'}, uvicorn 0.54.0). "
+    f"Versions: MCPSDKRust (this repository), rmcp 3.7.0, mcp 2.3.0 ({data.get('python') or 'Python'}, uvicorn 0.54.0). "
     "All servers speak MCP 2026-07-28 over Streamable HTTP/1.1 with JSON responses, bound to "
     "127.0.0.1, with release builds for Rust.",
     "",
@@ -82,7 +82,7 @@ def ratio(a, b, field, invert=False):
 
 lines += [
     "",
-    f"## SDKMCPRust relative to the others (c={mid})",
+    f"## MCPSDKRust relative to the others (c={mid})",
     "",
     "Throughput: how many times more requests per second. CPU: how many times less CPU time per request.",
     "",
@@ -91,10 +91,10 @@ lines += [
 ]
 for scenario in scenarios:
     lines.append(
-        f"| `{scenario}` | {ratio('sdkmcprust', 'rmcp', 'rps')} | "
-        f"{ratio('sdkmcprust', 'rmcp', 'cpu_ms_per_1k', invert=True)} | "
-        f"{ratio('sdkmcprust', 'python mcp (1 process)', 'rps')} | "
-        f"{ratio('sdkmcprust', 'python mcp (1 process)', 'cpu_ms_per_1k', invert=True)} |"
+        f"| `{scenario}` | {ratio('mcpsdkrust', 'rmcp', 'rps')} | "
+        f"{ratio('mcpsdkrust', 'rmcp', 'cpu_ms_per_1k', invert=True)} | "
+        f"{ratio('mcpsdkrust', 'python mcp (1 process)', 'rps')} | "
+        f"{ratio('mcpsdkrust', 'python mcp (1 process)', 'cpu_ms_per_1k', invert=True)} |"
     )
 
 errors = sum(r["errors"] for r in data["results"])

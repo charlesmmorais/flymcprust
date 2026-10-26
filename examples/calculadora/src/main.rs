@@ -14,7 +14,7 @@ const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:8000";
 async fn main() -> ExitCode {
     // Logs (with fix-it hints) go to stderr: on stdio, stdout carries MCP
     // messages only.
-    sdkmcprust::logging::init();
+    mcpsdkrust::logging::init();
 
     let server = match calculadora::server() {
         Ok(server) => server,
