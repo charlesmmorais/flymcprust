@@ -5,8 +5,8 @@
 //! `cargo run -p calculadora -- --http 127.0.0.1:8000` (Streamable HTTP).
 #![forbid(unsafe_code)]
 
-use mcpsdkrust::prelude::*;
-use mcpsdkrust::{BuildError, ServerBuilder};
+use flymcprust::prelude::*;
+use flymcprust::{BuildError, ServerBuilder};
 use schemars::JsonSchema;
 use serde::Serialize;
 

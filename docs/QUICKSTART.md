@@ -17,7 +17,7 @@ cd hello-mcp
 ```
 
 ```bash
-cargo add mcpsdkrust --git https://github.com/charlesmmorais/sdkmcprust --features stdio,logging
+cargo add flymcprust --git https://github.com/charlesmmorais/sdkmcprust --features stdio,logging
 ```
 
 ```bash
@@ -25,14 +25,14 @@ cargo add tokio --features macros,rt-multi-thread
 ```
 
 The SDK is not on crates.io yet; once it is, the third command becomes
-`cargo add mcpsdkrust --features stdio,logging`.
+`cargo add flymcprust --features stdio,logging`.
 
 ## 2. Write a tool (1 minute)
 
 Replace `src/main.rs`:
 
 ```rust
-use mcpsdkrust::prelude::*;
+use flymcprust::prelude::*;
 
 /// Says hello to someone.
 ///
@@ -45,7 +45,7 @@ fn hello(name: String) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    mcpsdkrust::logging::init();
+    flymcprust::logging::init();
     Server::builder("hello-mcp", "0.1.0")
         .tool::<hello>()
         .build()?
@@ -103,8 +103,8 @@ cargo add schemars
 Then extend `src/main.rs`:
 
 ```rust
-use mcpsdkrust::prelude::*;
-use mcpsdkrust::BuildError;
+use flymcprust::prelude::*;
+use flymcprust::BuildError;
 
 /// Says hello to someone.
 ///
@@ -158,7 +158,7 @@ fn server() -> Result<Server, BuildError> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    mcpsdkrust::logging::init();
+    flymcprust::logging::init();
     server()?.serve_stdio().await?;
     Ok(())
 }
@@ -187,7 +187,7 @@ WARN a client that did not declare the needed capability called a handler that a
 ## 5. Test it (1 minute)
 
 ```bash
-cargo add mcpsdkrust --dev --git https://github.com/charlesmmorais/sdkmcprust --features test-client
+cargo add flymcprust --dev --git https://github.com/charlesmmorais/sdkmcprust --features test-client
 ```
 
 ```bash
@@ -200,7 +200,7 @@ Append to `src/main.rs`:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcpsdkrust::testing::TestClient;
+    use flymcprust::testing::TestClient;
     use serde_json::json;
 
     #[tokio::test]

@@ -22,7 +22,7 @@
       "rss_peak_mib": 6.19921875,
       "scenario": "tools_list",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 16,
@@ -37,7 +37,7 @@
       "rss_peak_mib": 8.44921875,
       "scenario": "tools_list",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 64,
@@ -52,7 +52,7 @@
       "rss_peak_mib": 8.7578125,
       "scenario": "tools_list",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 256,
@@ -67,7 +67,7 @@
       "rss_peak_mib": 12.15234375,
       "scenario": "tools_list",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 1,
@@ -82,7 +82,7 @@
       "rss_peak_mib": 8.89453125,
       "scenario": "call_add",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 16,
@@ -97,7 +97,7 @@
       "rss_peak_mib": 9.29296875,
       "scenario": "call_add",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 64,
@@ -112,7 +112,7 @@
       "rss_peak_mib": 9.9375,
       "scenario": "call_add",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 256,
@@ -127,7 +127,7 @@
       "rss_peak_mib": 12.35546875,
       "scenario": "call_add",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 1,
@@ -142,7 +142,7 @@
       "rss_peak_mib": 9.21484375,
       "scenario": "call_stats_100",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 16,
@@ -157,7 +157,7 @@
       "rss_peak_mib": 9.45703125,
       "scenario": "call_stats_100",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 64,
@@ -172,7 +172,7 @@
       "rss_peak_mib": 9.78515625,
       "scenario": "call_stats_100",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 256,
@@ -187,7 +187,7 @@
       "rss_peak_mib": 12.87109375,
       "scenario": "call_stats_100",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 1,
@@ -202,7 +202,7 @@
       "rss_peak_mib": 9.63671875,
       "scenario": "call_echo_64KiB",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 16,
@@ -217,7 +217,7 @@
       "rss_peak_mib": 15.45703125,
       "scenario": "call_echo_64KiB",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 64,
@@ -232,7 +232,7 @@
       "rss_peak_mib": 22.7265625,
       "scenario": "call_echo_64KiB",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 256,
@@ -247,7 +247,7 @@
       "rss_peak_mib": 49.75390625,
       "scenario": "call_echo_64KiB",
       "seconds": 8.0,
-      "server": "mcpsdkrust"
+      "server": "flymcprust"
     },
     {
       "concurrency": 1,
@@ -502,7 +502,7 @@
       "rss_peak_mib": 5.8828125,
       "scenario": "tools_list",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 16,
@@ -517,7 +517,7 @@
       "rss_peak_mib": 6.25,
       "scenario": "tools_list",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 64,
@@ -532,7 +532,7 @@
       "rss_peak_mib": 6.76953125,
       "scenario": "tools_list",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 256,
@@ -547,7 +547,7 @@
       "rss_peak_mib": 9.7265625,
       "scenario": "tools_list",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 1,
@@ -562,7 +562,7 @@
       "rss_peak_mib": 6.796875,
       "scenario": "call_add",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 16,
@@ -577,7 +577,7 @@
       "rss_peak_mib": 6.8125,
       "scenario": "call_add",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 64,
@@ -592,7 +592,7 @@
       "rss_peak_mib": 7.4375,
       "scenario": "call_add",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 256,
@@ -607,7 +607,7 @@
       "rss_peak_mib": 9.59765625,
       "scenario": "call_add",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 1,
@@ -622,7 +622,7 @@
       "rss_peak_mib": 6.50390625,
       "scenario": "call_stats_100",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 16,
@@ -637,7 +637,7 @@
       "rss_peak_mib": 6.53125,
       "scenario": "call_stats_100",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 64,
@@ -652,7 +652,7 @@
       "rss_peak_mib": 7.11328125,
       "scenario": "call_stats_100",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 256,
@@ -667,7 +667,7 @@
       "rss_peak_mib": 9.75390625,
       "scenario": "call_stats_100",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 1,
@@ -682,7 +682,7 @@
       "rss_peak_mib": 6.890625,
       "scenario": "call_echo_64KiB",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 16,
@@ -697,7 +697,7 @@
       "rss_peak_mib": 8.3203125,
       "scenario": "call_echo_64KiB",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 64,
@@ -712,7 +712,7 @@
       "rss_peak_mib": 16.11328125,
       "scenario": "call_echo_64KiB",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 256,
@@ -727,7 +727,7 @@
       "rss_peak_mib": 42.71484375,
       "scenario": "call_echo_64KiB",
       "seconds": 8.0,
-      "server": "mcpsdkrust (1 thread)"
+      "server": "flymcprust (1 thread)"
     },
     {
       "concurrency": 1,
@@ -1212,10 +1212,10 @@
   ],
   "servers": [
     {
-      "artifact": "bench-mcpsdkrust.exe",
+      "artifact": "bench-flymcprust.exe",
       "artifact_mib": 1.8759765625,
       "idle_rss_mib": 5.9453125,
-      "server": "mcpsdkrust",
+      "server": "flymcprust",
       "startup_ms": 42.0174
     },
     {
@@ -1226,10 +1226,10 @@
       "startup_ms": 43.3795
     },
     {
-      "artifact": "bench-mcpsdkrust.exe",
+      "artifact": "bench-flymcprust.exe",
       "artifact_mib": 1.8759765625,
       "idle_rss_mib": 5.68359375,
-      "server": "mcpsdkrust (1 thread)",
+      "server": "flymcprust (1 thread)",
       "startup_ms": 50.515299999999996
     },
     {

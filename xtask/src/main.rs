@@ -1,9 +1,9 @@
-//! Development tasks for MCPSDKRust.
+//! Development tasks for FlyMCPRust.
 //!
 //! - `cargo xtask fetch-spec <revision>` downloads the pinned schema files of a
 //!   spec revision into `spec/<revision>/` and writes a SHA-256 lock.
 //! - `cargo xtask codegen [--check]` generates the protocol types of every
-//!   known revision into `crates/mcpsdkrust-spec/src/`. With `--check`, it
+//!   known revision into `crates/flymcprust-spec/src/`. With `--check`, it
 //!   fails if the committed output is stale instead of writing it.
 #![forbid(unsafe_code)]
 #![allow(clippy::print_stdout, clippy::print_stderr)]

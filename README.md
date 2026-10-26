@@ -1,6 +1,10 @@
-# MCPSDKRust
+# FlyMCPRust
 
-**MCP server SDK for Rust.**
+**High-Performance MCP Server SDK for Rust**
+
+*Built in Rust. Engineered for Speed.*
+
+FAST · SAFE · SIMPLE · STATELESS
 
 > Build [Model Context Protocol](https://modelcontextprotocol.io) servers
 > with the ergonomics of FastMCP and the guarantees of Rust.
@@ -35,12 +39,12 @@ New to MCP or to this SDK? Follow
 
 ```toml
 [dependencies]
-mcpsdkrust = { git = "…", features = ["stdio"] }
+flymcprust = { git = "…", features = ["stdio"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```rust
-use mcpsdkrust::prelude::*;
+use flymcprust::prelude::*;
 
 /// Adds two numbers.
 ///
@@ -178,8 +182,8 @@ async fn import(ctx: Ctx, files: Vec<String>) -> Result<String, ToolError> {
 ### Requiring OAuth (HTTP)
 
 ```rust
-use mcpsdkrust::auth::JwtVerifier; // feature `oauth`
-use mcpsdkrust::transport::http::{AllowedHosts, HttpConfig, OAuth, StreamableHttpService};
+use flymcprust::auth::JwtVerifier; // feature `oauth`
+use flymcprust::transport::http::{AllowedHosts, HttpConfig, OAuth, StreamableHttpService};
 
 /// Deletes a file.
 #[tool(destructive, scopes = ["files:write"])]
@@ -410,7 +414,7 @@ Enable `test-client` in `[dev-dependencies]` to drive a server in process
 through the real wire format:
 
 ```rust
-use mcpsdkrust::testing::TestClient;
+use flymcprust::testing::TestClient;
 
 #[tokio::test]
 async fn adds() {
@@ -425,14 +429,14 @@ async fn adds() {
 ### Against rmcp and the official Python SDK
 
 [`bench/`](bench) runs the same server (same tools, MCP 2026-07-28,
-Streamable HTTP/1.1, JSON responses) written with MCPSDKRust, `rmcp` 3.7.0
+Streamable HTTP/1.1, JSON responses) written with FlyMCPRust, `rmcp` 3.7.0
 and the official Python SDK `mcp` 2.3.0, under one load generator. Full
 tables, method and caveats: [bench/results/RESULTS.md](bench/results/RESULTS.md).
 
 At 64 concurrent clients (laptop, load generator on the same machine,
 2026-10-25):
 
-| Scenario | MCPSDKRust req/s | rmcp req/s | Python req/s | CPU per request vs rmcp | vs Python |
+| Scenario | FlyMCPRust req/s | rmcp req/s | Python req/s | CPU per request vs rmcp | vs Python |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `tools/list` | 79,051 | 42,164 | 2,024 | 2.3× less | 9.3× less |
 | `tools/call` (trivial tool) | 59,920 | 37,156 | 1,816 | 2.6× less | 9.8× less |
@@ -455,7 +459,7 @@ mcp-load -- suite` (see [bench/README.md](bench/README.md)).
 
 ### Micro-benchmarks
 
-`cargo bench -p mcpsdkrust-core` (criterion), measured on 2026-10-25 on an
+`cargo bench -p flymcprust-core` (criterion), measured on 2026-10-25 on an
 Intel Core i5-12450HX laptop (16 GB, Windows 11) with Rust 1.99.1. Laptop
 measurements vary by about ±20% between runs because of thermal throttling.
 Each phase is checked against the previous code (interleaved runs, plus the

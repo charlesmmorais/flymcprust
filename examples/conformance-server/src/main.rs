@@ -16,12 +16,12 @@ mod fixtures;
 
 use std::process::ExitCode;
 
-use mcpsdkrust::prelude::*;
-use mcpsdkrust::spec::{
+use flymcprust::prelude::*;
+use flymcprust::spec::{
     self, AudioContent, ClientCapabilities, ContentBlock, EmbeddedResource,
     EmbeddedResourceResource, ImageContent, TextContent, TextResourceContents,
 };
-use mcpsdkrust::{IntoToolResult, ToolDef};
+use flymcprust::{IntoToolResult, ToolDef};
 
 /// A 1×1 red PNG.
 const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
@@ -152,7 +152,7 @@ async fn main() -> ExitCode {
     let server = json_schema_tool()
         .map_err(|e| e.to_string())
         .and_then(|schema_tool| {
-            let builder = Server::builder("mcpsdkrust-conformance", env!("CARGO_PKG_VERSION"))
+            let builder = Server::builder("flymcprust-conformance", env!("CARGO_PKG_VERSION"))
                 .tool::<test_simple_text>()
                 .tool::<test_image_content>()
                 .tool::<test_audio_content>()

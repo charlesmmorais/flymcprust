@@ -26,7 +26,7 @@ servers and competes on simplicity, efficiency and security.
 Claims of efficiency need numbers anyone can reproduce. A separate workspace
 (`bench/`) holds:
 
-- the **same server** written with MCPSDKRust, `rmcp` and the official Python
+- the **same server** written with FlyMCPRust, `rmcp` and the official Python
   SDK (`mcp`, FastMCP-style API), all speaking 2026-07-28 over Streamable
   HTTP: a trivial tool, a 64 KiB echo, structured output and `tools/list`;
 - a **load generator** in Rust that adds as little client overhead as

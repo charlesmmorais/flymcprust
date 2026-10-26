@@ -8,17 +8,17 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-authors = ["The MCPSDKRust contributors"]
+authors = ["The FlyMCPRust contributors"]
 keywords = ["mcp", "model-context-protocol", "sdk", "ai", "llm"]
 categories = ["network-programming", "asynchronous", "api-bindings"]
 publish = false
 
 [workspace.dependencies]
 # Internal crates.
-mcpsdkrust = { path = "crates/mcpsdkrust", version = "0.1.0" }
-mcpsdkrust-core = { path = "crates/mcpsdkrust-core", version = "0.1.0" }
-mcpsdkrust-macros = { path = "crates/mcpsdkrust-macros", version = "0.1.0" }
-mcpsdkrust-spec = { path = "crates/mcpsdkrust-spec", version = "0.1.0" }
+flymcprust = { path = "crates/flymcprust", version = "0.1.0" }
+flymcprust-core = { path = "crates/flymcprust-core", version = "0.1.0" }
+flymcprust-macros = { path = "crates/flymcprust-macros", version = "0.1.0" }
+flymcprust-spec = { path = "crates/flymcprust-spec", version = "0.1.0" }
 
 # External crates.
 base64 = "0.22.1"

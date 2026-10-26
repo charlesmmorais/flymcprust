@@ -1,11 +1,11 @@
-# Comparative benchmarks: the same MCP server written with MCPSDKRust, rmcp
+# Comparative benchmarks: the same MCP server written with FlyMCPRust, rmcp
 # and the official Python SDK, driven by one load generator.
 # Separate workspace (excluded from the main one) so regular builds and CI
 # stay light. Run from the repository root:
 #
 #   cargo run --release --manifest-path bench/Cargo.toml -p mcp-load -- suite
 [workspace]
-members = ["servers/mcpsdkrust", "servers/rmcp", "loadgen"]
+members = ["servers/flymcprust", "servers/rmcp", "loadgen"]
 resolver = "3"
 
 [workspace.package]

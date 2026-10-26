@@ -47,10 +47,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
-name = "bench-mcpsdkrust"
+name = "bench-flymcprust"
 version = "0.0.0"
 dependencies = [
- "mcpsdkrust",
+ "flymcprust",
  "schemars",
  "serde",
  "tokio",
@@ -258,6 +258,61 @@ name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
+
+[[package]]
+name = "flymcprust"
+version = "0.1.0"
+dependencies = [
+ "flymcprust-core",
+ "flymcprust-macros",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "flymcprust-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "flymcprust-spec",
+ "futures-util",
+ "getrandom",
+ "hmac",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "memchr",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "flymcprust-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "flymcprust-spec"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "futures"
@@ -557,61 +612,6 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "tokio",
-]
-
-[[package]]
-name = "mcpsdkrust"
-version = "0.1.0"
-dependencies = [
- "mcpsdkrust-core",
- "mcpsdkrust-macros",
- "schemars",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "mcpsdkrust-core"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-util",
- "getrandom",
- "hmac",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-util",
- "mcpsdkrust-spec",
- "memchr",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "tokio",
- "tokio-util",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "mcpsdkrust-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.9",
-]
-
-[[package]]
-name = "mcpsdkrust-spec"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

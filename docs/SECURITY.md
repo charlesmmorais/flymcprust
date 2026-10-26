@@ -1,13 +1,13 @@
 # Security model
 
-This document describes what MCPSDKRust defends against, how, and what
+This document describes what FlyMCPRust defends against, how, and what
 remains the responsibility of applications built with it. It also records
 the findings of each security review. To report a vulnerability, see
 [SECURITY.md](../SECURITY.md).
 
 ## 1. Scope and trust boundaries
 
-MCPSDKRust is a library for MCP **servers** (spec revision 2026-07-28). It
+FlyMCPRust is a library for MCP **servers** (spec revision 2026-07-28). It
 receives JSON-RPC messages from clients over stdio or Streamable HTTP and
 runs handler code (tools, resources, prompts) written by the application.
 
@@ -84,8 +84,8 @@ The SDK cannot enforce these; applications must:
 
 ## 5. Verification
 
-- Regression tests for every finding: `crates/mcpsdkrust/tests/security.rs`
-  and `crates/mcpsdkrust-core/tests/http.rs`.
+- Regression tests for every finding: `crates/flymcprust/tests/security.rs`
+  and `crates/flymcprust-core/tests/http.rs`.
 - Fuzz targets (60 s each in CI): `parse_message`, `handle_message`,
   `match_uri` (asserts the separator and control-character guarantees).
 - The official conformance suite runs in CI, including the tampered-state
@@ -99,7 +99,7 @@ Reviewed: legacy sessions and server-to-client requests (HTTP and stdio),
 SSE response streaming and notifications, the OAuth resource server, the
 JWT verifier and key fetching, and the binding of `requestState` and
 sessions to the principal. Findings 1 to 3 were reproduced by a failing test
-before the fix (`crates/mcpsdkrust-core/tests/hardening.rs`).
+before the fix (`crates/flymcprust-core/tests/hardening.rs`).
 
 | # | Severity | Finding | Fix |
 | --- | --- | --- | --- |

@@ -1,13 +1,13 @@
 # Architecture
 
-This document records the architectural decisions behind MCPSDKRust, the
+This document records the architectural decisions behind FlyMCPRust, the
 alternatives that were considered and rejected, and the reasoning behind each
 choice. It is a living document: when a decision changes, update the relevant
 section and note the change in the decision log at the end.
 
 ## 1. Goals
 
-MCPSDKRust is a Rust SDK for building Model Context Protocol (MCP) servers.
+FlyMCPRust is a Rust SDK for building Model Context Protocol (MCP) servers.
 It aims to be:
 
 - **The most ergonomic** Rust MCP SDK: FastMCP-style tools declared as plain
@@ -131,11 +131,11 @@ benchmarks. Progress is measured with the official
 
 ```
 crates/
-  mcpsdkrust-spec/     Generated protocol types, one module per revision.
-  mcpsdkrust-core/     Runtime: JSON-RPC, limits, routing, registry,
+  flymcprust-spec/     Generated protocol types, one module per revision.
+  flymcprust-core/     Runtime: JSON-RPC, limits, routing, registry,
                        extractors, errors, tower::Service, transports.
-  mcpsdkrust-macros/   The #[tool], #[resource] and #[prompt] macros.
-  mcpsdkrust/          Facade crate that re-exports the public API.
+  flymcprust-macros/   The #[tool], #[resource] and #[prompt] macros.
+  flymcprust/          Facade crate that re-exports the public API.
 xtask/                 Spec fetching and code generation.
 examples/calculadora/  Example server.
 fuzz/                  cargo-fuzz targets (outside the workspace).
@@ -144,13 +144,13 @@ spec/<revision>/       Pinned schema files plus a SHA-256 lock.
 
 | Crate | Depends on | Notes |
 | --- | --- | --- |
-| `mcpsdkrust-spec` | `serde`, `serde_json` | No I/O and no async runtime, so it is WASM-ready. Module `v2026_07_28`; `v2025_11_25` will follow. |
-| `mcpsdkrust-core` | spec, `tower`, `futures`, `tokio` (sync/time), `tracing`, `schemars` | Features: `stdio`, `http` (`http`, `http-body-util`, `hyper`, `hyper-util`), `test-client`. |
-| `mcpsdkrust-macros` | `syn`, `quote`, `proc-macro2`, `darling` | Emits paths through the facade (`::mcpsdkrust::__private`). |
-| `mcpsdkrust` | core, macros | Features: `macros` (default), `stdio`, `http`, `auto-register`. |
+| `flymcprust-spec` | `serde`, `serde_json` | No I/O and no async runtime, so it is WASM-ready. Module `v2026_07_28`; `v2025_11_25` will follow. |
+| `flymcprust-core` | spec, `tower`, `futures`, `tokio` (sync/time), `tracing`, `schemars` | Features: `stdio`, `http` (`http`, `http-body-util`, `hyper`, `hyper-util`), `test-client`. |
+| `flymcprust-macros` | `syn`, `quote`, `proc-macro2`, `darling` | Emits paths through the facade (`::flymcprust::__private`). |
+| `flymcprust` | core, macros | Features: `macros` (default), `stdio`, `http`, `auto-register`. |
 
-**Naming.** The working title is `MCPSDKRust`. Crate names use lowercase
-(`mcpsdkrust-*`) because crates.io is case-insensitive and the ecosystem
+**Naming.** The working title is `FlyMCPRust`. Crate names use lowercase
+(`flymcprust-*`) because crates.io is case-insensitive and the ecosystem
 convention is lowercase. The final name is still to be decided.
 
 **Alternatives considered.**
@@ -165,7 +165,7 @@ convention is lowercase. The final name is still to be decided.
 `cargo xtask fetch-spec <revision>` downloads `schema.json` and `schema.ts` at
 the pinned commit into `spec/<revision>/`, together with a SHA-256 lock file.
 `cargo xtask codegen` turns them into Rust under
-`crates/mcpsdkrust-spec/src/v<revision>/`. The generated code is committed, so
+`crates/flymcprust-spec/src/v<revision>/`. The generated code is committed, so
 users never need network access to build. CI runs `cargo xtask codegen --check`
 and fails if the committed output is stale.
 
@@ -435,7 +435,7 @@ Server::builder("calc", "0.1.0")
 surprising and depends on linker support on every platform.
 
 `inventory` relies on link sections. The spike confirmed it is compatible
-with `#![forbid(unsafe_code)]`, both in `mcpsdkrust-core` (which declares the
+with `#![forbid(unsafe_code)]`, both in `flymcprust-core` (which declares the
 registry) and in user crates (where `#[tool]` submits entries), so no
 exception to the safety rules is needed.
 

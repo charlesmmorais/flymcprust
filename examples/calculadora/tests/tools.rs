@@ -6,8 +6,8 @@
     clippy::indexing_slicing
 )]
 
-use mcpsdkrust::spec::{CallToolResult, ContentBlock};
-use mcpsdkrust::testing::{ClientError, TestClient};
+use flymcprust::spec::{CallToolResult, ContentBlock};
+use flymcprust::testing::{ClientError, TestClient};
 use serde_json::json;
 
 fn client() -> TestClient {

@@ -3,8 +3,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use mcpsdkrust_core::Limits;
-use mcpsdkrust_core::jsonrpc;
+use flymcprust_core::Limits;
+use flymcprust_core::jsonrpc;
 
 fuzz_target!(|data: &[u8]| {
     let limits = Limits::default();

@@ -5,7 +5,7 @@
 use std::sync::OnceLock;
 
 use libfuzzer_sys::fuzz_target;
-use mcpsdkrust_core::{Server, TransportContext};
+use flymcprust_core::{Server, TransportContext};
 use tokio_util::sync::CancellationToken;
 
 fn server() -> &'static Server {

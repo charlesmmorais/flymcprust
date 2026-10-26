@@ -8,7 +8,7 @@
 # use `#![forbid(unsafe_code)]`. It is test-only code and is never shipped
 # (see docs/ARCHITECTURE.md §9).
 [package]
-name = "mcpsdkrust-fuzz"
+name = "flymcprust-fuzz"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -18,7 +18,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.10"
-mcpsdkrust-core = { path = "../crates/mcpsdkrust-core", features = ["oauth"] }
+flymcprust-core = { path = "../crates/flymcprust-core", features = ["oauth"] }
 serde_json = "1.0.140"
 tokio = { version = "1.47.0", features = ["rt"] }
 tokio-util = "0.7.15"

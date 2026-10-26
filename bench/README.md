@@ -4,7 +4,7 @@ The same MCP server written with three SDKs, driven by one load generator:
 
 | Server | SDK | Code |
 | --- | --- | --- |
-| `mcpsdkrust` | This repository | [servers/mcpsdkrust](servers/mcpsdkrust/src/main.rs) |
+| `flymcprust` | This repository | [servers/flymcprust](servers/flymcprust/src/main.rs) |
 | `rmcp` | Official Rust SDK, `rmcp` 3.7.0 | [servers/rmcp](servers/rmcp/src/main.rs) |
 | `python mcp` | Official Python SDK, `mcp` 2.3.0 (`MCPServer` API) | [servers/python](servers/python/server.py) |
 

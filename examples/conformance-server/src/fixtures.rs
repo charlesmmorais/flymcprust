@@ -4,12 +4,12 @@
 // Sampling and roots are deprecated (SEP-2577) but still tested.
 #![allow(deprecated)]
 
-use mcpsdkrust::prelude::*;
-use mcpsdkrust::spec::{
+use flymcprust::prelude::*;
+use flymcprust::spec::{
     self, BlobResourceContents, ContentBlock, PromptMessage, Role, SamplingMessage,
     SamplingMessageContent, TextContent,
 };
-use mcpsdkrust::{ResourceContents, ServerBuilder};
+use flymcprust::{ResourceContents, ServerBuilder};
 use serde::Deserialize;
 
 use crate::{PNG, image, text_resource};
@@ -276,17 +276,17 @@ pub(crate) fn register(builder: ServerBuilder) -> ServerBuilder {
 // requests as server-to-client requests; the handlers are the same.
 
 fn describe(
-    answer: &mcpsdkrust::Elicitation<serde_json::Map<String, serde_json::Value>>,
+    answer: &flymcprust::Elicitation<serde_json::Map<String, serde_json::Value>>,
 ) -> String {
     match answer {
-        mcpsdkrust::Elicitation::Accepted(content) => {
+        flymcprust::Elicitation::Accepted(content) => {
             format!(
                 "action=accept, content={}",
                 serde_json::Value::Object(content.clone())
             )
         }
-        mcpsdkrust::Elicitation::Declined => "action=decline, content={}".to_owned(),
-        mcpsdkrust::Elicitation::Cancelled => "action=cancel, content={}".to_owned(),
+        flymcprust::Elicitation::Declined => "action=decline, content={}".to_owned(),
+        flymcprust::Elicitation::Cancelled => "action=cancel, content={}".to_owned(),
     }
 }
 
@@ -394,7 +394,7 @@ async fn test_tool_with_progress(ctx: Ctx) -> String {
 /// Sends three log messages while it runs.
 #[tool]
 async fn test_tool_with_logging(ctx: Ctx) -> String {
-    use mcpsdkrust::spec::LoggingLevel;
+    use flymcprust::spec::LoggingLevel;
     ctx.log(LoggingLevel::Info, "Tool execution started");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     ctx.log(LoggingLevel::Info, "Tool processing data");
@@ -407,7 +407,7 @@ async fn test_tool_with_logging(ctx: Ctx) -> String {
 #[tool]
 async fn test_logging_tool(ctx: Ctx) -> String {
     ctx.log(
-        mcpsdkrust::spec::LoggingLevel::Info,
+        flymcprust::spec::LoggingLevel::Info,
         "diagnostic log message",
     );
     "logged".to_owned()

@@ -25,7 +25,7 @@ pub(crate) fn run(root: &Path, check: bool) -> Result<()> {
         let generated = generate(root, *revision)
             .with_context(|| format!("generating revision {}", revision.name))?;
         let out = root
-            .join("crates/mcpsdkrust-spec/src")
+            .join("crates/flymcprust-spec/src")
             .join(revision.module)
             .join("mod.rs");
         if check {
