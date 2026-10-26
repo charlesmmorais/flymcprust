@@ -1,4 +1,5 @@
-//! Benchmark server: rmcp (official Rust SDK). Usage: `bench-rmcp <port>`.
+//! Benchmark server: rmcp (official Rust SDK). Usage: `bench-rmcp <port>`,
+//! or `bench-rmcp stdio`.
 //!
 //! Configured like the other servers: stateless, JSON responses (no SSE),
 //! loopback hosts, HTTP/1.1 served by hyper.
@@ -69,6 +70,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use hyper_util::service::TowerToHyperService;
 
     let port = std::env::args().nth(1).unwrap_or_else(|| "8002".to_owned());
+    if port == "stdio" {
+        use rmcp::ServiceExt as _;
+        Bench
+            .serve(rmcp::transport::stdio())
+            .await?
+            .waiting()
+            .await?;
+        return Ok(());
+    }
     let mut config = StreamableHttpServerConfig::default();
     config.legacy_session_mode = false;
     config.json_response = true;

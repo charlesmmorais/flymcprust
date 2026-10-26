@@ -1,6 +1,6 @@
 """Benchmark server: official MCP Python SDK (MCPServer API).
 
-Usage: python server.py <port>
+Usage: python server.py <port>, or python server.py stdio
 
 Configured like the other servers: 2026-07-28 stateless, JSON responses
 (json_response=True), served by uvicorn on 127.0.0.1, one process.
@@ -51,6 +51,9 @@ def stats(values: list[float]) -> Stats:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "stdio":
+        mcp.run("stdio")
+        sys.exit(0)
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8003
     app = mcp.streamable_http_app(json_response=True)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)

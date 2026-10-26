@@ -1,19 +1,27 @@
-//! `mcp-load`: closed-loop load generator for MCP servers over Streamable
-//! HTTP (2026-07-28, JSON responses).
+//! `mcp-load`: closed-loop load generator for MCP servers (2026-07-28),
+//! over Streamable HTTP (JSON responses) or stdio.
 //!
 //! ```text
-//! mcp-load suite [--quick] [--out DIR]      run every server and scenario
-//! mcp-load run URL SCENARIO CONCURRENCY SECONDS
+//! mcp-load suite [--quick] [--repeat N] [--server-cpus LIST] [--only TEXT] [--out DIR]
+//! mcp-load run AUTHORITY SCENARIO [CONCURRENCY] [SECONDS]
 //! ```
 //!
-//! Each simulated client owns one keep-alive HTTP/1.1 connection and sends a
-//! new request as soon as the previous response arrives. Latency is recorded
-//! in an HDR histogram after a warm-up period; the server process's memory
-//! (RSS) and CPU time are sampled through `sysinfo`.
+//! HTTP: each simulated client owns one keep-alive HTTP/1.1 connection and
+//! sends a new request as soon as the previous response arrives. stdio:
+//! each simulated client keeps one request in flight on the server's single
+//! pipe. Latency is recorded in an HDR histogram after a warm-up period; the
+//! server process's memory (RSS) and CPU time are sampled through `sysinfo`.
+//!
+//! `--server-cpus 0-1` (Linux) pins the server to those CPUs with `taskset`;
+//! run the load generator itself on the others (`taskset -c 2-3 mcp-load
+//! ...`) so the two do not compete. `--repeat N` measures every point N
+//! times; the report shows the median and the spread.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -21,9 +29,11 @@ use hdrhistogram::Histogram;
 use http_body_util::{BodyExt as _, Full};
 use hyper::Request;
 use hyper_util::rt::TokioIo;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
+use tokio::sync::{mpsc, oneshot};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -66,30 +76,38 @@ fn scenarios() -> Vec<Scenario> {
     ]
 }
 
-/// A prepared request: body and headers built once.
+/// The JSON-RPC message of a scenario, without its `id`.
+fn message(s: &Scenario) -> Value {
+    let mut params = json!({
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+        }
+    });
+    if let Some(tool) = s.tool {
+        params["name"] = json!(tool);
+        params["arguments"] = s.arguments.clone();
+    }
+    json!({ "jsonrpc": "2.0", "method": s.method, "params": params })
+}
+
+/// A prepared HTTP request: body and headers built once.
 struct Prepared {
     body: Bytes,
     method: &'static str,
     tool: Option<&'static str>,
+    bearer: Option<String>,
 }
 
 impl Prepared {
-    fn new(s: &Scenario) -> Self {
-        let mut params = json!({
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {},
-            }
-        });
-        if let Some(tool) = s.tool {
-            params["name"] = json!(tool);
-            params["arguments"] = s.arguments.clone();
-        }
-        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": s.method, "params": params });
+    fn new(s: &Scenario, token: Option<&str>) -> Self {
+        let mut body = message(s);
+        body["id"] = json!(1);
         Self {
             body: Bytes::from(serde_json::to_vec(&body).unwrap_or_default()),
             method: s.method,
             tool: s.tool,
+            bearer: token.map(|t| format!("Bearer {t}")),
         }
     }
 
@@ -102,6 +120,9 @@ impl Prepared {
             .header("mcp-method", self.method);
         if let Some(tool) = self.tool {
             builder = builder.header("mcp-name", tool);
+        }
+        if let Some(bearer) = &self.bearer {
+            builder = builder.header("authorization", bearer);
         }
         builder
             .body(Full::new(self.body.clone()))
@@ -116,17 +137,38 @@ struct WorkerStats {
     errors: u64,
 }
 
-/// One closed-loop client.
-async fn worker(
+impl WorkerStats {
+    fn new() -> Self {
+        Self {
+            histogram: Histogram::new_with_bounds(1, 60_000_000, 3).ok(),
+            ..Self::default()
+        }
+    }
+
+    fn record(&mut self, started: Instant, record_from: Instant, ok: bool) {
+        if started < record_from {
+            return;
+        }
+        if ok {
+            self.ok += 1;
+            if let Some(h) = &mut self.histogram {
+                let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                let _ = h.record(micros.max(1));
+            }
+        } else {
+            self.errors += 1;
+        }
+    }
+}
+
+/// One closed-loop HTTP client.
+async fn http_worker(
     authority: Arc<str>,
     prepared: Arc<Prepared>,
     record_from: Instant,
     until: Instant,
 ) -> WorkerStats {
-    let mut stats = WorkerStats {
-        histogram: Histogram::new_with_bounds(1, 60_000_000, 3).ok(),
-        ..WorkerStats::default()
-    };
+    let mut stats = WorkerStats::new();
     'connect: while Instant::now() < until {
         let Ok(stream) = tokio::net::TcpStream::connect(&*authority).await else {
             stats.errors += 1;
@@ -147,7 +189,7 @@ async fn worker(
                 continue 'connect;
             }
             let started = Instant::now();
-            let outcome = match sender.send_request(prepared.request(&authority)).await {
+            let ok = match sender.send_request(prepared.request(&authority)).await {
                 Ok(response) => {
                     let ok = response.status().is_success();
                     match response.into_body().collect().await {
@@ -157,24 +199,111 @@ async fn worker(
                 }
                 Err(_) => false,
             };
-            let elapsed = started.elapsed();
-            if started >= record_from {
-                if outcome {
-                    stats.ok += 1;
-                    if let Some(h) = &mut stats.histogram {
-                        let _ = h.record(
-                            u64::try_from(elapsed.as_micros())
-                                .unwrap_or(u64::MAX)
-                                .max(1),
-                        );
-                    }
-                } else {
-                    stats.errors += 1;
-                }
-            }
-            if !outcome {
+            stats.record(started, record_from, ok);
+            if !ok {
                 continue 'connect;
             }
+        }
+    }
+    stats
+}
+
+/// A server spoken to over its stdin and stdout. Responses are matched to
+/// requests by id.
+#[derive(Clone)]
+struct StdioPeer {
+    lines: mpsc::Sender<Vec<u8>>,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<bool>>>>,
+    next_id: Arc<AtomicU64>,
+}
+
+#[derive(Deserialize)]
+struct Reply {
+    id: Option<u64>,
+    result: Option<serde::de::IgnoredAny>,
+}
+
+impl StdioPeer {
+    fn start(child: &mut Child) -> Option<Self> {
+        let stdin = child.stdin.take()?;
+        let stdout = child.stdout.take()?;
+        let mut stdin = tokio::process::ChildStdin::from_std(stdin).ok()?;
+        let stdout = tokio::process::ChildStdout::from_std(stdout).ok()?;
+        let (lines, mut outgoing) = mpsc::channel::<Vec<u8>>(4096);
+        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<bool>>>> = Arc::default();
+        tokio::spawn(async move {
+            while let Some(line) = outgoing.recv().await {
+                if stdin.write_all(&line).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let replies = Arc::clone(&pending);
+        tokio::spawn(async move {
+            let mut reader = tokio::io::BufReader::new(stdout);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                match reader.read_until(b'\n', &mut line).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let Ok(reply) = serde_json::from_slice::<Reply>(&line) else {
+                    continue;
+                };
+                let Some(id) = reply.id else { continue };
+                let waiter = replies.lock().ok().and_then(|mut p| p.remove(&id));
+                if let Some(waiter) = waiter {
+                    let _ = waiter.send(reply.result.is_some());
+                }
+            }
+        });
+        Some(Self {
+            lines,
+            pending,
+            next_id: Arc::new(AtomicU64::new(1)),
+        })
+    }
+
+    /// Sends one request (`template` is the message without its leading
+    /// `{`) and waits for the answer.
+    async fn call(&self, template: &str) -> bool {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.insert(id, tx);
+        }
+        let line = format!("{{\"id\":{id},{template}\n").into_bytes();
+        if self.lines.send(line).await.is_err() {
+            return false;
+        }
+        matches!(
+            tokio::time::timeout(Duration::from_secs(30), rx).await,
+            Ok(Ok(true))
+        )
+    }
+}
+
+/// The message of a scenario as a stdio line template.
+fn stdio_template(s: &Scenario) -> String {
+    let text = message(s).to_string();
+    text.strip_prefix('{').unwrap_or(&text).to_owned()
+}
+
+/// One closed-loop stdio client.
+async fn stdio_worker(
+    peer: StdioPeer,
+    template: Arc<str>,
+    record_from: Instant,
+    until: Instant,
+) -> WorkerStats {
+    let mut stats = WorkerStats::new();
+    while Instant::now() < until {
+        let started = Instant::now();
+        let ok = peer.call(&template).await;
+        stats.record(started, record_from, ok);
+        if !ok {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
     stats
@@ -183,8 +312,11 @@ async fn worker(
 #[derive(Serialize, Clone)]
 struct Measurement {
     server: String,
+    transport: &'static str,
     scenario: String,
     concurrency: usize,
+    /// Repetition index (0-based).
+    run: usize,
     seconds: f64,
     requests: u64,
     errors: u64,
@@ -249,30 +381,59 @@ impl Probe {
     }
 }
 
+/// How the load reaches the server.
+enum Driver {
+    Http {
+        authority: Arc<str>,
+        token: Option<String>,
+    },
+    Stdio(StdioPeer),
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn measure(
     server: &str,
-    authority: &str,
+    driver: &Driver,
     pid: Option<u32>,
     scenario: &Scenario,
     concurrency: usize,
+    run: usize,
     warmup: Duration,
     duration: Duration,
 ) -> Measurement {
-    let prepared = Arc::new(Prepared::new(scenario));
-    let authority: Arc<str> = Arc::from(authority);
     let start = Instant::now();
     let record_from = start + warmup;
     let until = record_from + duration;
-    let handles: Vec<_> = (0..concurrency)
-        .map(|_| {
-            tokio::spawn(worker(
-                Arc::clone(&authority),
-                Arc::clone(&prepared),
-                record_from,
-                until,
-            ))
-        })
-        .collect();
+    let (handles, transport): (Vec<_>, _) = match driver {
+        Driver::Http { authority, token } => {
+            let prepared = Arc::new(Prepared::new(scenario, token.as_deref()));
+            let handles = (0..concurrency)
+                .map(|_| {
+                    tokio::spawn(http_worker(
+                        Arc::clone(authority),
+                        Arc::clone(&prepared),
+                        record_from,
+                        until,
+                    ))
+                })
+                .collect();
+            (handles, "http")
+        }
+        Driver::Stdio(peer) => {
+            let template: Arc<str> = Arc::from(stdio_template(scenario));
+            let handles = (0..concurrency)
+                .map(|_| {
+                    tokio::spawn(stdio_worker(
+                        peer.clone(),
+                        Arc::clone(&template),
+                        record_from,
+                        until,
+                    ))
+                })
+                .collect();
+            (handles, "stdio")
+        }
+    };
 
     // Sample the server while the load runs.
     let mut probe = Probe::new(pid);
@@ -305,8 +466,10 @@ async fn measure(
     let q = |p: f64| merged.as_ref().map_or(0, |h| h.value_at_quantile(p));
     Measurement {
         server: server.to_owned(),
+        transport,
         scenario: scenario.name.to_owned(),
         concurrency,
+        run,
         seconds,
         requests: ok,
         errors,
@@ -316,7 +479,9 @@ async fn measure(
         p99_us: q(0.99),
         max_us: merged.as_ref().map_or(0, Histogram::max),
         cpu_ms_per_1k: match (cpu_start, cpu_end) {
-            (Some(a), Some(b)) if ok > 0 => Some((b.saturating_sub(a)) as f64 * 1000.0 / ok as f64),
+            // No progress means the sampler missed the window (seen on
+            // Windows): report nothing rather than zero.
+            (Some(a), Some(b)) if ok > 0 && b > a => Some((b - a) as f64 * 1000.0 / ok as f64),
             _ => None,
         },
         rss_peak_mib: (rss_peak > 0).then(|| rss_peak as f64 / (1024.0 * 1024.0)),
@@ -329,7 +494,10 @@ struct Target {
     program: PathBuf,
     args: Vec<String>,
     env: Vec<(&'static str, &'static str)>,
-    port: u16,
+    /// `None`: stdio.
+    port: Option<u16>,
+    /// Bearer token sent with every request (OAuth).
+    token: Option<String>,
     /// What is measured as the deployable artifact.
     artifact: PathBuf,
 }
@@ -337,6 +505,7 @@ struct Target {
 #[derive(Serialize)]
 struct ServerInfo {
     server: String,
+    transport: &'static str,
     startup_ms: Option<f64>,
     idle_rss_mib: Option<f64>,
     artifact_mib: Option<f64>,
@@ -349,6 +518,7 @@ fn exe(name: &str) -> String {
 
 fn targets(root: &Path) -> Vec<Target> {
     let release = root.join("bench").join("target").join("release");
+    let fixtures = root.join("bench").join("fixtures");
     let python_dir = root.join("bench").join("servers").join("python");
     let venv = python_dir.join(".venv");
     let python = if cfg!(windows) {
@@ -356,39 +526,67 @@ fn targets(root: &Path) -> Vec<Target> {
     } else {
         venv.join("bin").join("python")
     };
-    let rust =
-        |name: &'static str, bin: &str, port: u16, env: Vec<(&'static str, &'static str)>| Target {
-            name,
-            program: release.join(exe(bin)),
-            args: vec![port.to_string()],
-            env,
-            port,
-            artifact: release.join(exe(bin)),
-        };
+    let server_py = python_dir.join("server.py").display().to_string();
+    let rust = |name: &'static str,
+                bin: &str,
+                port: Option<u16>,
+                env: Vec<(&'static str, &'static str)>| Target {
+        name,
+        program: release.join(exe(bin)),
+        args: vec![port.map_or_else(|| "stdio".to_owned(), |p| p.to_string())],
+        env,
+        port,
+        token: None,
+        artifact: release.join(exe(bin)),
+    };
+    let token = std::fs::read_to_string(fixtures.join("token.txt"))
+        .ok()
+        .map(|t| t.trim().to_owned());
+    let mut oauth = rust(
+        "flymcprust + OAuth (JWT RS256)",
+        "bench-flymcprust",
+        Some(8106),
+        vec![],
+    );
+    oauth.args.push("oauth".to_owned());
+    oauth
+        .args
+        .push(fixtures.join("jwks.json").display().to_string());
+    oauth.token = token;
     vec![
-        rust("flymcprust", "bench-flymcprust", 8101, vec![]),
-        rust("rmcp", "bench-rmcp", 8102, vec![]),
+        rust("flymcprust", "bench-flymcprust", Some(8101), vec![]),
+        rust("rmcp", "bench-rmcp", Some(8102), vec![]),
         rust(
             "flymcprust (1 thread)",
             "bench-flymcprust",
-            8104,
+            Some(8104),
             vec![("TOKIO_WORKER_THREADS", "1")],
         ),
         rust(
             "rmcp (1 thread)",
             "bench-rmcp",
-            8105,
+            Some(8105),
             vec![("TOKIO_WORKER_THREADS", "1")],
         ),
         Target {
             name: "python mcp (1 process)",
-            program: python,
-            args: vec![
-                python_dir.join("server.py").display().to_string(),
-                "8103".to_owned(),
-            ],
+            program: python.clone(),
+            args: vec![server_py.clone(), "8103".to_owned()],
             env: vec![],
-            port: 8103,
+            port: Some(8103),
+            token: None,
+            artifact: venv.clone(),
+        },
+        oauth,
+        rust("flymcprust", "bench-flymcprust", None, vec![]),
+        rust("rmcp", "bench-rmcp", None, vec![]),
+        Target {
+            name: "python mcp (1 process)",
+            program: python,
+            args: vec![server_py, "stdio".to_owned()],
+            env: vec![],
+            port: None,
+            token: None,
             artifact: venv,
         },
     ]
@@ -403,36 +601,50 @@ fn dir_size(path: &Path) -> u64 {
     })
 }
 
-/// Sends `server/discover` until it succeeds.
-async fn wait_ready(authority: &str, timeout: Duration) -> Option<Duration> {
-    let prepared = Prepared::new(&Scenario {
+fn discover() -> Scenario {
+    Scenario {
         name: "discover",
         method: "server/discover",
         tool: None,
         arguments: Value::Null,
-    });
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        // Short attempts: on Windows a refused loopback connection takes
-        // about half a second to fail, which would dominate the measurement.
-        let connect = tokio::time::timeout(
-            Duration::from_millis(20),
-            tokio::net::TcpStream::connect(authority),
-        );
-        if let Ok(Ok(stream)) = connect.await
-            && let Ok((mut sender, connection)) =
-                hyper::client::conn::http1::handshake(TokioIo::new(stream)).await
-        {
-            tokio::spawn(connection);
-            if let Ok(response) = sender.send_request(prepared.request(authority)).await
-                && response.status().is_success()
-            {
-                return Some(start.elapsed());
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(2)).await;
     }
-    None
+}
+
+/// Sends `server/discover` until it succeeds.
+async fn wait_ready(driver: &Driver, timeout: Duration) -> Option<Duration> {
+    let start = Instant::now();
+    match driver {
+        Driver::Stdio(peer) => {
+            let template = stdio_template(&discover());
+            let ready = tokio::time::timeout(timeout, peer.call(&template)).await;
+            matches!(ready, Ok(true)).then(|| start.elapsed())
+        }
+        Driver::Http { authority, token } => {
+            let prepared = Prepared::new(&discover(), token.as_deref());
+            while start.elapsed() < timeout {
+                // Short attempts: on Windows a refused loopback connection
+                // takes about half a second to fail, which would dominate the
+                // measurement.
+                let connect = tokio::time::timeout(
+                    Duration::from_millis(20),
+                    tokio::net::TcpStream::connect(&**authority),
+                );
+                if let Ok(Ok(stream)) = connect.await
+                    && let Ok((mut sender, connection)) =
+                        hyper::client::conn::http1::handshake(TokioIo::new(stream)).await
+                {
+                    tokio::spawn(connection);
+                    if let Ok(response) = sender.send_request(prepared.request(authority)).await
+                        && response.status().is_success()
+                    {
+                        return Some(start.elapsed());
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+            None
+        }
+    }
 }
 
 struct Running(Child);
@@ -444,7 +656,7 @@ impl Drop for Running {
     }
 }
 
-fn machine() -> Value {
+fn machine(server_cpus: Option<&str>) -> Value {
     let mut system = System::new();
     system.refresh_cpu_all();
     system.refresh_memory();
@@ -453,16 +665,34 @@ fn machine() -> Value {
         "logical_cores": system.cpus().len(),
         "memory_gib": (system.total_memory() as f64 / 1024f64.powi(3)).round(),
         "os": System::long_os_version(),
+        "arch": std::env::consts::ARCH,
+        "server_cpus": server_cpus,
     })
 }
 
-async fn suite(quick: bool, out: &Path) -> Result<(), Error> {
+struct Options {
+    quick: bool,
+    /// Only targets whose name or transport contains this text.
+    only: Option<String>,
+    repeat: usize,
+    server_cpus: Option<String>,
+    out: PathBuf,
+}
+
+async fn suite(options: &Options) -> Result<(), Error> {
     let root = std::env::current_dir()?;
-    let (concurrency, warmup, duration): (&[usize], _, _) = if quick {
-        (&[1, 64], Duration::from_secs(1), Duration::from_secs(3))
+    let (http_levels, stdio_levels, warmup, duration): (&[usize], &[usize], _, _) = if options.quick
+    {
+        (
+            &[1, 64],
+            &[1, 16],
+            Duration::from_secs(1),
+            Duration::from_secs(3),
+        )
     } else {
         (
-            &[1, 16, 64, 256],
+            &[1, 16, 64, 256, 1024],
+            &[1, 16, 64],
             Duration::from_secs(2),
             Duration::from_secs(8),
         )
@@ -470,29 +700,61 @@ async fn suite(quick: bool, out: &Path) -> Result<(), Error> {
     let mut infos = Vec::new();
     let mut results = Vec::new();
     for target in targets(&root) {
+        let transport = if target.port.is_some() {
+            "http"
+        } else {
+            "stdio"
+        };
+        if let Some(only) = &options.only
+            && !format!("{} {transport}", target.name).contains(only.as_str())
+        {
+            continue;
+        }
         if !target.program.exists() {
             eprintln!(
-                "skipping {}: {} not found",
+                "skipping {} ({transport}): {} not found",
                 target.name,
                 target.program.display()
             );
             continue;
         }
-        eprintln!("== {}", target.name);
-        let authority = format!("127.0.0.1:{}", target.port);
-        let child = Command::new(&target.program)
+        eprintln!("== {} ({transport})", target.name);
+        let mut command = match &options.server_cpus {
+            Some(cpus) if cfg!(target_os = "linux") => {
+                let mut c = Command::new("taskset");
+                c.arg("-c").arg(cpus).arg(&target.program);
+                c
+            }
+            _ => Command::new(&target.program),
+        };
+        command
             .args(&target.args)
             .envs(target.env.iter().copied())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+            .stderr(Stdio::null());
+        if target.port.is_some() {
+            command.stdin(Stdio::null()).stdout(Stdio::null());
+        } else {
+            command.stdin(Stdio::piped()).stdout(Stdio::piped());
+        }
+        let mut child = command.spawn()?;
         let pid = child.id();
+        let driver = match target.port {
+            Some(port) => Driver::Http {
+                authority: Arc::from(format!("127.0.0.1:{port}")),
+                token: target.token.clone(),
+            },
+            None => match StdioPeer::start(&mut child) {
+                Some(peer) => Driver::Stdio(peer),
+                None => continue,
+            },
+        };
         let child = Running(child);
-        let startup = wait_ready(&authority, Duration::from_secs(60)).await;
+        let startup = wait_ready(&driver, Duration::from_secs(60)).await;
         tokio::time::sleep(Duration::from_millis(500)).await;
         let idle = Probe::new(Some(pid)).sample().map(|(rss, _)| rss);
         infos.push(ServerInfo {
             server: target.name.to_owned(),
+            transport,
             startup_ms: startup.map(|d| d.as_secs_f64() * 1000.0),
             idle_rss_mib: idle.map(|b| b as f64 / (1024.0 * 1024.0)),
             artifact_mib: Some(dir_size(&target.artifact) as f64 / (1024.0 * 1024.0)),
@@ -503,32 +765,41 @@ async fn suite(quick: bool, out: &Path) -> Result<(), Error> {
                 .unwrap_or_default(),
         });
         if startup.is_none() {
-            eprintln!("   did not start; skipped");
+            eprintln!("   did not answer server/discover; skipped");
             continue;
         }
+        let levels = if target.port.is_some() {
+            http_levels
+        } else {
+            stdio_levels
+        };
         for scenario in scenarios() {
-            for &c in concurrency {
-                let m = measure(
-                    target.name,
-                    &authority,
-                    Some(pid),
-                    &scenario,
-                    c,
-                    warmup,
-                    duration,
-                )
-                .await;
-                eprintln!(
-                    "   {:<16} c={:<4} {:>9.0} req/s  p50 {:>6} µs  p99 {:>7} µs  errors {}",
-                    m.scenario, m.concurrency, m.rps, m.p50_us, m.p99_us, m.errors
-                );
-                results.push(m);
+            for &c in levels {
+                for run in 0..options.repeat {
+                    let m = measure(
+                        target.name,
+                        &driver,
+                        Some(pid),
+                        &scenario,
+                        c,
+                        run,
+                        warmup,
+                        duration,
+                    )
+                    .await;
+                    eprintln!(
+                        "   {:<16} c={:<4} #{run} {:>9.0} req/s  p50 {:>6} µs  p99 {:>7} µs  errors {}",
+                        m.scenario, m.concurrency, m.rps, m.p50_us, m.p99_us, m.errors
+                    );
+                    results.push(m);
+                }
             }
         }
+        drop(driver);
         drop(child);
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    std::fs::create_dir_all(out)?;
+    std::fs::create_dir_all(&options.out)?;
     let python_version = targets(&root)
         .into_iter()
         .find(|t| t.name.starts_with("python"))
@@ -536,15 +807,17 @@ async fn suite(quick: bool, out: &Path) -> Result<(), Error> {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
     let report = json!({
         "date": std::env::var("BENCH_DATE").ok(),
+        "commit": std::env::var("BENCH_COMMIT").ok(),
         "python": python_version,
-        "machine": machine(),
-        "quick": quick,
+        "machine": machine(options.server_cpus.as_deref()),
+        "quick": options.quick,
+        "repeat": options.repeat,
         "warmup_s": warmup.as_secs_f64(),
         "duration_s": duration.as_secs_f64(),
         "servers": infos,
         "results": results,
     });
-    let path = out.join("results.json");
+    let path = options.out.join("results.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&report)?)?;
     eprintln!("wrote {}", path.display());
     Ok(())
@@ -553,15 +826,22 @@ async fn suite(quick: bool, out: &Path) -> Result<(), Error> {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let value = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
     match args.first().map(String::as_str) {
         Some("suite") => {
-            let quick = args.iter().any(|a| a == "--quick");
-            let out = args
-                .iter()
-                .position(|a| a == "--out")
-                .and_then(|i| args.get(i + 1))
-                .map_or_else(|| PathBuf::from("bench/results"), PathBuf::from);
-            suite(quick, &out).await
+            let options = Options {
+                quick: args.iter().any(|a| a == "--quick"),
+                only: value("--only"),
+                repeat: value("--repeat").map_or(Ok(1), |r| r.parse())?.max(1),
+                server_cpus: value("--server-cpus"),
+                out: value("--out").map_or_else(|| PathBuf::from("bench/results"), PathBuf::from),
+            };
+            suite(&options).await
         }
         Some("run") => {
             let url = args
@@ -574,12 +854,17 @@ async fn main() -> Result<(), Error> {
                 .into_iter()
                 .find(|s| s.name == name)
                 .ok_or("unknown scenario")?;
+            let driver = Driver::Http {
+                authority: Arc::from(url.as_str()),
+                token: std::env::var("MCP_LOAD_TOKEN").ok(),
+            };
             let m = measure(
                 "adhoc",
-                url,
+                &driver,
                 None,
                 &scenario,
                 concurrency,
+                0,
                 Duration::from_secs(1),
                 Duration::from_secs(seconds),
             )
@@ -589,7 +874,8 @@ async fn main() -> Result<(), Error> {
         }
         _ => {
             eprintln!(
-                "usage: mcp-load suite [--quick] [--out DIR] | mcp-load run AUTHORITY SCENARIO [CONCURRENCY] [SECONDS]"
+                "usage: mcp-load suite [--quick] [--repeat N] [--server-cpus LIST] [--out DIR] | \
+                 mcp-load run AUTHORITY SCENARIO [CONCURRENCY] [SECONDS]"
             );
             Ok(())
         }

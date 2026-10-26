@@ -1,17 +1,34 @@
-# Comparative benchmarks (FlyMCPRust vs rmcp vs the official Python SDK).
-# Runs weekly and on demand; results are uploaded as an artifact. Shared CI
-# runners are noisy: use these runs to spot regressions, and a quiet machine
-# for published numbers (see bench/README.md).
+# Comparative benchmarks (FlyMCPRust vs rmcp vs the official Python SDK),
+# over Streamable HTTP and stdio, with and without OAuth.
+#
+# Runs on two architectures (x86-64 and ARM64 runners). The server is pinned
+# to half of the CPUs and the load generator to the other half, and every
+# point is measured three times; the report shows the median and the
+# spread. Results are uploaded as artifacts. Shared runners are still
+# shared machines: compare servers to each other, and check the spread.
 name: Benchmarks
 
 on:
   workflow_dispatch:
+    inputs:
+      repeat:
+        description: Measurements per point
+        default: "3"
   schedule:
     - cron: "0 6 * * 1"
 
+permissions:
+  contents: read
+
 jobs:
   compare:
-    runs-on: ubuntu-latest
+    name: benchmarks (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -21,10 +38,24 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: cargo build --release --manifest-path bench/Cargo.toml
       - run: uv sync --project bench/servers/python
-      - run: echo "BENCH_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
-      - run: cargo run --release --manifest-path bench/Cargo.toml -p mcp-load -- suite --out bench/results
-      - run: python3 bench/report.py
+      - name: Split the CPUs between server and load generator
+        run: |
+          n=$(nproc)
+          half=$((n / 2))
+          echo "SERVER_CPUS=0-$((half - 1))" >> "$GITHUB_ENV"
+          echo "CLIENT_CPUS=$half-$((n - 1))" >> "$GITHUB_ENV"
+          echo "BENCH_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
+          echo "BENCH_COMMIT=${{ github.sha }}" >> "$GITHUB_ENV"
+          echo "OUT=bench/results/ci-$(uname -m)" >> "$GITHUB_ENV"
+      - name: Run the suite
+        run: >
+          taskset -c "$CLIENT_CPUS"
+          ./bench/target/release/mcp-load suite
+          --repeat "${{ github.event.inputs.repeat || 3 }}"
+          --server-cpus "$SERVER_CPUS"
+          --out "$OUT"
+      - run: python3 bench/report.py "$OUT/results.json"
       - uses: actions/upload-artifact@v4
         with:
-          name: bench-results
-          path: bench/results/
+          name: bench-results-${{ matrix.runner }}
+          path: ${{ env.OUT }}

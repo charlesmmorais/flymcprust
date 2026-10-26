@@ -6,6 +6,6 @@ publish.workspace = true
 
 [dependencies]
 schemars.workspace = true
-flymcprust = { path = "../../../crates/flymcprust", features = ["http"] }
+flymcprust = { path = "../../../crates/flymcprust", features = ["http", "stdio", "oauth"] }
 serde.workspace = true
 tokio.workspace = true

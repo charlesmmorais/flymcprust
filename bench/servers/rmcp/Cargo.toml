@@ -6,7 +6,7 @@ publish.workspace = true
 
 [dependencies]
 hyper-util = { version = "0.1.16", features = ["tokio", "server", "http1", "service"] }
-rmcp = { version = "=3.7.0", features = ["server", "macros", "schemars", "transport-streamable-http-server"] }
+rmcp = { version = "=3.7.0", features = ["server", "macros", "schemars", "transport-streamable-http-server", "transport-io"] }
 schemars.workspace = true
 serde.workspace = true
 tokio.workspace = true
