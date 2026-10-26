@@ -1,5 +1,7 @@
 # Comparative benchmarks (FlyMCPRust vs rmcp vs the official Python SDK),
-# over Streamable HTTP and stdio, with and without OAuth.
+# over Streamable HTTP and stdio, with and without OAuth, plus the
+# real-world suite (200 tools, complex payloads, 4,096 connections, an
+# upstream service, mixed load, authentication on both Rust SDKs).
 #
 # Runs on two architectures (x86-64 and ARM64 runners). The server is pinned
 # to half of the CPUs and the load generator to the other half, and every
@@ -14,6 +16,9 @@ on:
       repeat:
         description: Measurements per point
         default: "3"
+      suites:
+        description: "Suites to run: basic, real, or both"
+        default: "basic real"
   schedule:
     - cron: "0 6 * * 1"
 
@@ -24,7 +29,7 @@ jobs:
   compare:
     name: benchmarks (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
@@ -47,14 +52,19 @@ jobs:
           echo "BENCH_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
           echo "BENCH_COMMIT=${{ github.sha }}" >> "$GITHUB_ENV"
           echo "OUT=bench/results/ci-$(uname -m)" >> "$GITHUB_ENV"
-      - name: Run the suite
-        run: >
-          taskset -c "$CLIENT_CPUS"
-          ./bench/target/release/mcp-load suite
-          --repeat "${{ github.event.inputs.repeat || 3 }}"
-          --server-cpus "$SERVER_CPUS"
-          --out "$OUT"
-      - run: python3 bench/report.py "$OUT/results.json"
+          echo "SUITES=${{ github.event.inputs.suites || 'basic real' }}" >> "$GITHUB_ENV"
+          echo "REPEAT=${{ github.event.inputs.repeat || 3 }}" >> "$GITHUB_ENV"
+      - name: Run the basic suite
+        if: contains(env.SUITES, 'basic')
+        run: |
+          taskset -c "$CLIENT_CPUS" ./bench/target/release/mcp-load suite             --repeat "$REPEAT" --server-cpus "$SERVER_CPUS" --out "$OUT/basic"
+          python3 bench/report.py "$OUT/basic/results.json"
+      - name: Run the real-world suite
+        if: contains(env.SUITES, 'real')
+        run: |
+          ulimit -n 65536 || ulimit -n "$(ulimit -Hn)"
+          taskset -c "$CLIENT_CPUS" ./bench/target/release/mcp-load real             --repeat "$REPEAT" --server-cpus "$SERVER_CPUS" --out "$OUT/real"
+          python3 bench/report_real.py "$OUT/real/results.json"
       - uses: actions/upload-artifact@v4
         with:
           name: bench-results-${{ matrix.runner }}

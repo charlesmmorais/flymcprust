@@ -3,8 +3,11 @@
 //!
 //! ```text
 //! mcp-load suite [--quick] [--repeat N] [--server-cpus LIST] [--only TEXT] [--out DIR]
+//! mcp-load real  [--quick] [--repeat N] [--server-cpus LIST] [--only TEXT] [--out DIR]
 //! mcp-load run AUTHORITY SCENARIO [CONCURRENCY] [SECONDS]
 //! ```
+//!
+//! `real` runs the real-world suite (see `real.rs`).
 //!
 //! HTTP: each simulated client owns one keep-alive HTTP/1.1 connection and
 //! sends a new request as soon as the previous response arrives. stdio:
@@ -16,6 +19,8 @@
 //! run the load generator itself on the others (`taskset -c 2-3 mcp-load
 //! ...`) so the two do not compete. `--repeat N` measures every point N
 //! times; the report shows the median and the spread.
+
+mod real;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -842,6 +847,17 @@ async fn main() -> Result<(), Error> {
                 out: value("--out").map_or_else(|| PathBuf::from("bench/results"), PathBuf::from),
             };
             suite(&options).await
+        }
+        Some("real") => {
+            let options = Options {
+                quick: args.iter().any(|a| a == "--quick"),
+                only: value("--only"),
+                repeat: value("--repeat").map_or(Ok(1), |r| r.parse())?.max(1),
+                server_cpus: value("--server-cpus"),
+                out: value("--out")
+                    .map_or_else(|| PathBuf::from("bench/results/real"), PathBuf::from),
+            };
+            real::suite(&options).await
         }
         Some("run") => {
             let url = args

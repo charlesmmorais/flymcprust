@@ -1,10 +1,18 @@
 //! Benchmark server: FlyMCPRust.
 //!
 //! ```text
-//! bench-flymcprust <port>                 Streamable HTTP
-//! bench-flymcprust <port> oauth <jwks>    Streamable HTTP, OAuth (JWT RS256)
-//! bench-flymcprust stdio                  stdio
+//! bench-flymcprust <port> [real] [defaults] [oauth <jwks>]   Streamable HTTP
+//! bench-flymcprust stdio                                      stdio
 //! ```
+//!
+//! `real` adds the real-world tools (200 generated tools, a complex payload,
+//! an upstream call); `oauth` requires an RS256 JWT on every request;
+//! `defaults` keeps the SDK's default limits (64 concurrent tool calls, 256
+//! requests in flight, 1024 connections) instead of raising them.
+mod many;
+mod real;
+mod upstream;
+
 use flymcprust::auth::JwtVerifier;
 use flymcprust::prelude::*;
 use flymcprust::transport::http::{HttpConfig, OAuth, StreamableHttpService, serve};
@@ -53,21 +61,30 @@ const AUDIENCE: &str = "http://127.0.0.1/mcp";
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let server = Server::builder("bench", "1.0.0")
-        .tool::<add>()
-        .tool::<echo>()
-        .tool::<stats>()
-        // The load generator sends up to 1024 concurrent requests.
-        .max_concurrent_calls(2048)
-        .build()?;
+    let flag = |name: &str| args.iter().any(|a| a == name);
+    let mut builder = Server::builder("bench", "1.0.0").tool::<add>();
+    builder = if flag("real") {
+        many::register(builder.tool::<real::order>().tool::<real::fetch>())
+    } else {
+        builder.tool::<echo>().tool::<stats>()
+    };
+    if !flag("defaults") {
+        // The load generator sends up to 4096 concurrent requests.
+        builder = builder.max_concurrent_calls(8192);
+    }
+    let server = builder.build()?;
     let port = args.first().map_or("8001", String::as_str);
     if port == "stdio" {
         server.serve_stdio().await?;
         return Ok(());
     }
-    let mut config = HttpConfig::new().max_in_flight(4096).max_connections(4096);
-    if args.get(1).map(String::as_str) == Some("oauth") {
-        let jwks = std::fs::read_to_string(args.get(2).ok_or("missing JWKS path")?)?;
+    let mut config = if flag("defaults") {
+        HttpConfig::new()
+    } else {
+        HttpConfig::new().max_in_flight(8192).max_connections(8192)
+    };
+    if let Some(i) = args.iter().position(|a| a == "oauth") {
+        let jwks = std::fs::read_to_string(args.get(i + 1).ok_or("missing JWKS path")?)?;
         let verifier = JwtVerifier::builder(ISSUER, AUDIENCE).jwks(jwks).build()?;
         let oauth = OAuth::builder(AUDIENCE, verifier)
             .authorization_server(ISSUER)

@@ -99,6 +99,22 @@ call_add 64 10` measures a server you started yourself.
   real server, tool work (database, network) adds the same cost to every
   SDK.
 
+## Real-world suite
+
+`mcp-load real` compares FlyMCPRust and rmcp under workloads closer to
+production: 200 tools with different schemas (generated for both SDKs by
+[`gen_tools.py`](gen_tools.py)), a nested ~10 KB payload, 1,024 and 4,096
+connections, a new connection per request, tools that call an HTTP
+upstream answering after 20 ms (simulated by the load generator), and a
+mixed load. Each runs with and without an RS256 JWT on every request,
+checked in both servers by the same verifier, and FlyMCPRust also runs with
+its default limits. Report: `python bench/report_real.py`.
+
+The rmcp servers keep their tool router in the handler. rmcp's
+`#[tool_router(server_handler)]` shortcut rebuilds the router on every
+request; the benchmarks before 2026-10-27 used it, which inflated
+FlyMCPRust's lead (see the archived results).
+
 ## Independent runs
 
 These numbers come from this repository's own harness. To check them, run
