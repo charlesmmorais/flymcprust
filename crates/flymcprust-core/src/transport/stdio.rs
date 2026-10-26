@@ -127,7 +127,9 @@ where
     };
     let permits = Arc::new(Semaphore::new(limits.max_concurrent_calls.max(1)));
     let mut tasks = JoinSet::new();
-    let mut reader = BufReader::new(reader);
+    // Large reads: tokio reads stdin on its blocking thread pool, one round
+    // trip per read.
+    let mut reader = BufReader::with_capacity(READ_BUFFER_BYTES, reader);
     let mut line = Vec::new();
 
     let read_result = loop {
@@ -305,14 +307,35 @@ where
     read_result.and(write_result)
 }
 
+/// Size of the stdin read buffer.
+const READ_BUFFER_BYTES: usize = 64 * 1024;
+
+/// Messages are coalesced into writes of up to this many bytes.
+const WRITE_BATCH_BYTES: usize = 64 * 1024;
+
 async fn write_loop<W: AsyncWrite + Unpin>(
     mut writer: W,
     mut rx: mpsc::Receiver<Vec<u8>>,
 ) -> io::Result<()> {
-    while let Some(mut message) = rx.recv().await {
-        message.push(b'\n');
-        writer.write_all(&message).await?;
+    // Messages ready at the same time go out in one write and one flush:
+    // tokio's stdout performs each write on its blocking thread pool, so
+    // writing them one by one costs two round trips per message.
+    let mut batch = Vec::new();
+    while let Some(message) = rx.recv().await {
+        batch.clear();
+        batch.extend_from_slice(&message);
+        batch.push(b'\n');
+        while batch.len() < WRITE_BATCH_BYTES {
+            let Ok(more) = rx.try_recv() else { break };
+            batch.extend_from_slice(&more);
+            batch.push(b'\n');
+        }
+        writer.write_all(&batch).await?;
         writer.flush().await?;
+        if batch.capacity() > 4 * WRITE_BATCH_BYTES {
+            // Do not keep the memory of one very large message.
+            batch = Vec::new();
+        }
     }
     writer.shutdown().await.or(Ok(()))
 }
