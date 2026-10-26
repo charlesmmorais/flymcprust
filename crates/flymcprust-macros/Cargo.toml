@@ -1,6 +1,6 @@
 [package]
 name = "flymcprust-macros"
-description = "Procedural macros for FlyMCPRust"
+description = "Procedural macros (`#[tool]`, `#[resource]`, `#[prompt]`) of FlyMCPRust. Use the `flymcprust` crate."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,9 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/flymcprust-macros"
 
 [lib]
 proc-macro = true

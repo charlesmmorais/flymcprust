@@ -11,7 +11,9 @@ license = "MIT OR Apache-2.0"
 authors = ["The FlyMCPRust contributors"]
 keywords = ["mcp", "model-context-protocol", "sdk", "ai", "llm"]
 categories = ["network-programming", "asynchronous", "api-bindings"]
-publish = false
+repository = "https://github.com/charlesmmorais/flymcprust"
+homepage = "https://github.com/charlesmmorais/flymcprust"
+publish = true
 
 [workspace.dependencies]
 # Internal crates.

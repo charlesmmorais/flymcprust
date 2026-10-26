@@ -1,6 +1,6 @@
 [package]
 name = "flymcprust-core"
-description = "Runtime and transports for FlyMCPRust"
+description = "Runtime and transports of FlyMCPRust, a high-performance MCP server SDK for Rust. Use the `flymcprust` crate."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,9 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/flymcprust-core"
 
 [package.metadata.docs.rs]
 all-features = true
