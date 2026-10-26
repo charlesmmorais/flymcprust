@@ -189,10 +189,13 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let extract = &injected.extract;
     let state_types = &injected.states;
 
+    // The handler is called through `__handler`, bound before the argument
+    // locals: an argument named like the function (`fn user(user: User)`)
+    // would otherwise shadow it.
     let call = if func.sig.asyncness.is_some() {
-        quote!(#fn_ident(#(#call_args),*).await)
+        quote!(__handler(#(#call_args),*).await)
     } else {
-        quote!(#fn_ident(#(#call_args),*))
+        quote!(__handler(#(#call_args),*))
     };
     let ret_ty = match &func.sig.output {
         ReturnType::Default => quote!(()),
@@ -255,6 +258,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                     arguments: ::core::option::Option<&#krate::RawValue>,
                     __ctx: #krate::Ctx,
                 ) -> ::core::result::Result<#krate::ToolFuture, #krate::ToolError> {
+                    let __handler = #fn_ident;
                     let __ToolArgs { #(#destructure),* } =
                         #krate::parse_arguments::<__ToolArgs>(arguments)?;
                     #(#extract)*
