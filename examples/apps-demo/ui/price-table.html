@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Price table</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+        font-size: 14px;
+      }
+      body { margin: 0; padding: 16px; }
+      h1 { font-size: 16px; margin: 0 0 12px; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { padding: 6px 8px; border-bottom: 1px solid rgba(128, 128, 128, 0.3); text-align: left; }
+      td.price, th.price { text-align: right; font-variant-numeric: tabular-nums; }
+      tr.excluded td { opacity: 0.45; text-decoration: line-through; }
+      .summary { margin-top: 12px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+      .reference { font-size: 18px; font-weight: 600; }
+      button { padding: 6px 12px; cursor: pointer; }
+      .error { color: #c0392b; }
+      .muted { opacity: 0.7; }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">Price survey</h1>
+    <p id="status" class="muted">Waiting for the survey…</p>
+    <table hidden id="table">
+      <thead>
+        <tr><th>Use</th><th>Source</th><th class="price">Unit price</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="summary" hidden id="summary">
+      <span>Reference price (median): <span class="reference" id="reference"></span></span>
+      <span class="muted" id="detail"></span>
+      <button id="recompute" type="button">Recompute</button>
+    </div>
+    <script type="module">
+      // The official helper, loaded from the CDN that the resource declares
+      // in its CSP (`csp_resources`).
+      import { App } from "https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps@2.0.3/dist/src/app-with-deps.js";
+
+      const $ = (id) => document.getElementById(id);
+      const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+      let quotes = [];
+
+      // Data only goes through textContent, never innerHTML: the page can
+      // call tools, so injected markup would act on the user's behalf.
+      function render(survey) {
+        quotes = survey.quotes.map((q) => ({ ...q, used: true }));
+        $("title").textContent = `Price survey: ${survey.item}`;
+        const rows = $("rows");
+        rows.replaceChildren();
+        quotes.forEach((quote, i) => {
+          const tr = document.createElement("tr");
+          const use = document.createElement("td");
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.checked = true;
+          box.addEventListener("change", () => {
+            quote.used = box.checked;
+            tr.classList.toggle("excluded", !box.checked);
+          });
+          use.append(box);
+          const source = document.createElement("td");
+          source.textContent = quote.source;
+          const price = document.createElement("td");
+          price.className = "price";
+          price.textContent = money.format(quote.price);
+          tr.append(use, source, price);
+          rows.append(tr);
+        });
+        $("reference").textContent = money.format(survey.reference_price);
+        $("detail").textContent = `${quotes.length} quotes`;
+        $("status").hidden = true;
+        $("table").hidden = false;
+        $("summary").hidden = false;
+      }
+
+      const app = new App({ name: "Price table", version: "1.0.0" });
+
+      // Register handlers before connecting: the host may deliver the tool
+      // result right away.
+      app.ontoolresult = (result) => {
+        if (result.structuredContent) {
+          render(result.structuredContent);
+        } else {
+          $("status").textContent = "The tool returned no data.";
+        }
+      };
+
+      $("recompute").addEventListener("click", async () => {
+        const prices = quotes.filter((q) => q.used).map((q) => q.price);
+        $("detail").classList.remove("error");
+        try {
+          // `reference_price` is an app-only tool (visibility = ["app"]).
+          const result = await app.callServerTool({
+            name: "reference_price",
+            arguments: { prices },
+          });
+          if (result.isError) {
+            $("detail").textContent = result.content?.[0]?.text ?? "Error";
+            $("detail").classList.add("error");
+            return;
+          }
+          const ref = result.structuredContent;
+          $("reference").textContent = money.format(ref.median);
+          $("detail").textContent = `${ref.count} quotes, mean ${money.format(ref.mean)}`;
+        } catch (error) {
+          $("detail").textContent = `Could not recompute: ${error.message ?? error}`;
+          $("detail").classList.add("error");
+        }
+      });
+
+      await app.connect();
+    </script>
+  </body>
+</html>

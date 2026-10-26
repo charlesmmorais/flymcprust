@@ -1,0 +1,22 @@
+[package]
+name = "apps-demo"
+description = "Example MCP server with an MCP Apps interface: an interactive price table"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+schemars.workspace = true
+flymcprust = { workspace = true, features = ["http", "logging"] }
+serde.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tracing.workspace = true
+
+[dev-dependencies]
+flymcprust = { workspace = true, features = ["test-client"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

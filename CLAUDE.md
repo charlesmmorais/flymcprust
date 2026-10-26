@@ -29,6 +29,7 @@ servers. Read `docs/ARCHITECTURE.md` before making design changes.
 | `crates/flymcprust` | Facade crate; the only crate users depend on |
 | `xtask` | `cargo xtask fetch-spec <rev>` and `cargo xtask codegen [--check]` |
 | `examples/calculadora` | Example server |
+| `examples/apps-demo` | MCP Apps example: a tool that opens an interactive page |
 | `examples/conformance-server` | Fixtures for the official conformance suite (`conformance-baseline.yml`) |
 | `fuzz` | cargo-fuzz targets (not a workspace member; needs nightly) |
 

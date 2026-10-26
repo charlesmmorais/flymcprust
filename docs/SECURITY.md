@@ -68,9 +68,9 @@ The SDK cannot enforce these; applications must:
 7. **Mind what you log.** Logs may contain client input. What you pass to
    `ctx.log` and progress messages is shown to the client: never include
    secrets or internal details.
-8. **Do not use MCP Apps visibility as access control.** Any client can call
-   an app-only tool after declaring the extension; protect sensitive tools
-   with OAuth scopes.
+8. **Do not use MCP Apps visibility as access control.** Every client can
+   list and call an app-only tool, and hosts without MCP Apps offer it to
+   the model; protect sensitive tools with OAuth scopes.
 9. **Keep untrusted data out of interface HTML.** MCP Apps pages run in the
    host's sandbox but can call tools through it; send data in tool results,
    not pasted into the page.
@@ -109,7 +109,7 @@ were re-checked after the previous review's fixes.
 
 | # | Severity | Finding | Fix |
 | --- | --- | --- | --- |
-| 1 | Medium | `tools/list` was identical for every client, so hosts without MCP Apps (which ignore `_meta.ui`) offered app-only tools to the model, which could then call them, although their authors meant them for the interface only. | App-only tools are left out of `tools/list`, and refused by `tools/call`, for clients that do not declare MCP Apps; two lists are pre-serialized at build time. Documented that visibility is not access control. |
+| 1 | Medium | `tools/list` was identical for every client, so hosts without MCP Apps (which ignore `_meta.ui`) offered app-only tools to the model, which could then call them, although their authors meant them for the interface only. | Fixed at first by hiding app-only tools from clients that do not declare MCP Apps. **Reverted on 2026-10-27** by the owner's decision: the official MCP Apps test host renders interfaces without declaring the extension, so the interface's own calls were refused. App-only tools are listed and callable for everyone again; the risk is documented (responsibility 8), and sensitive tools must use OAuth scopes. |
 | 2 | Low | A handler could serve an interface with another MIME type, which hosts do not render (a silent spec violation). | The MIME type of interface read results is always `text/html;profile=mcp-app`. |
 | 3 | Low | CSP origins accepted any scheme (`javascript://`, `data://`) and wildcards over a whole top-level domain (`https://*.com`), widening the page's sandbox. | Only `https`, `wss`, `http` and `ws`; a wildcard keeps at least two labels. |
 | 4 | Low (documentation) | Nothing warned that interface HTML must not embed untrusted data: the page can call tools through the host. | Responsibility 9 and module docs. |

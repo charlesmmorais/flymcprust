@@ -140,38 +140,25 @@ async fn tools_know_whether_the_host_renders_apps() {
     );
 }
 
-/// Hosts without MCP Apps would offer app-only tools to the model, so they
-/// neither see nor call them.
+/// App-only tools are listed and callable for every client: some hosts that
+/// render interfaces (such as the official test host) do not declare the
+/// extension, and their interfaces must still reach these tools.
 #[tokio::test]
-async fn app_only_tools_stay_out_of_reach_of_plain_clients() {
-    let plain = TestClient::new(server());
-    let names: Vec<String> = plain
-        .list_tools()
-        .await
-        .unwrap()
-        .tools
-        .into_iter()
-        .map(|t| t.name)
-        .collect();
-    assert_eq!(names, ["price_survey"]);
-    assert!(
-        plain
-            .call_tool("recompute", json!({ "sources": [1.0] }))
+async fn app_only_tools_reach_every_client() {
+    for client in [TestClient::new(server()), host()] {
+        let tools = client.list_tools().await.unwrap().tools;
+        let recompute = Value::Object(find(&tools, "recompute").meta.clone().unwrap());
+        assert_eq!(recompute, json!({ "ui": { "visibility": ["app"] } }));
+        let result = client
+            .call_tool("recompute", json!({ "sources": [1.0, 3.0] }))
             .await
-            .is_err()
-    );
-
-    let host = host();
-    assert_eq!(host.list_tools().await.unwrap().tools.len(), 2);
-    let result = host
-        .call_tool("recompute", json!({ "sources": [1.0, 3.0] }))
-        .await
-        .unwrap();
-    assert!(
-        serde_json::to_string(&result.content)
-            .unwrap()
-            .contains("\"2\"")
-    );
+            .unwrap();
+        assert!(
+            serde_json::to_string(&result.content)
+                .unwrap()
+                .contains("\"2\"")
+        );
+    }
 }
 
 /// A handler cannot serve an interface with another MIME type.

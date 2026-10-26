@@ -90,9 +90,9 @@ impl ToolDef {
     /// Who may call the tool (MCP Apps): `[Visibility::App]` hides it from
     /// the model and leaves it to the app's interface. Default: both.
     ///
-    /// Clients that do not declare MCP Apps neither list nor call app-only
-    /// tools. This is **not access control**: any client can declare the
-    /// extension. Protect sensitive tools with OAuth scopes.
+    /// This is a hint for hosts, **not access control**: every client can
+    /// list and call the tool, and hosts without MCP Apps show it to the
+    /// model like any other. Protect sensitive tools with OAuth scopes.
     #[must_use]
     pub fn visibility(
         mut self,

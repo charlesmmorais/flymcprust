@@ -12,9 +12,10 @@
 //!   [`ToolDef::visibility`](crate::ToolDef::visibility).
 //!
 //! The server declares the extension in `server/discover` automatically.
-//! App-only tools (`visibility = ["app"]`) are left out of `tools/list` for
-//! clients that do not declare MCP Apps, which would otherwise offer them to
-//! the model; visibility is not access control (use OAuth scopes).
+//! App-only tools (`visibility = ["app"]`) are listed and callable for every
+//! client: hosts that render interfaces hide them from the model, but a host
+//! without MCP Apps shows them like any tool. Visibility is not access
+//! control: protect sensitive tools with OAuth scopes.
 //!
 //! The page runs in the host's sandbox but can call tools through it: do not
 //! paste untrusted data into its HTML (cross-site scripting would let an
@@ -317,7 +318,7 @@ pub(crate) fn mark_contents(contents: &mut [crate::resource::ResourceContents], 
 }
 
 /// Whether client capabilities declare MCP Apps with its MIME type.
-pub(crate) fn supported_by(capabilities: &crate::spec::ClientCapabilities) -> bool {
+fn supported_by(capabilities: &crate::spec::ClientCapabilities) -> bool {
     capabilities
         .extensions
         .as_ref()
