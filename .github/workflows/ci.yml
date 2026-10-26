@@ -132,6 +132,7 @@ jobs:
           cargo fuzz run handle_message -- -max_total_time=60
           cargo fuzz run match_uri -- -max_total_time=60
           cargo fuzz run verify_jwt -- -max_total_time=60
+          cargo fuzz run http_request -- -max_total_time=60
 
   bench:
     name: benchmarks compile

@@ -68,6 +68,12 @@ The SDK cannot enforce these; applications must:
 7. **Mind what you log.** Logs may contain client input. What you pass to
    `ctx.log` and progress messages is shown to the client: never include
    secrets or internal details.
+8. **Do not use MCP Apps visibility as access control.** Any client can call
+   an app-only tool after declaring the extension; protect sensitive tools
+   with OAuth scopes.
+9. **Keep untrusted data out of interface HTML.** MCP Apps pages run in the
+   host's sandbox but can call tools through it; send data in tool results,
+   not pasted into the page.
 
 ## 4. Known limitations
 
@@ -92,6 +98,34 @@ The SDK cannot enforce these; applications must:
   and DNS-rebinding scenarios.
 
 ## 6. Review log
+
+### 2026-10-26: full audit, including OAuth and MCP Apps
+
+Reviewed: everything, with a checklist (no `unsafe`, no panics on the
+request path, client-facing errors, secrets in logs, limits, timing,
+supply chain, fuzz coverage), and in depth the code added since the
+previous review: MCP Apps and the macros' new attributes. OAuth and JWT
+were re-checked after the previous review's fixes.
+
+| # | Severity | Finding | Fix |
+| --- | --- | --- | --- |
+| 1 | Medium | `tools/list` was identical for every client, so hosts without MCP Apps (which ignore `_meta.ui`) offered app-only tools to the model, which could then call them, although their authors meant them for the interface only. | App-only tools are left out of `tools/list`, and refused by `tools/call`, for clients that do not declare MCP Apps; two lists are pre-serialized at build time. Documented that visibility is not access control. |
+| 2 | Low | A handler could serve an interface with another MIME type, which hosts do not render (a silent spec violation). | The MIME type of interface read results is always `text/html;profile=mcp-app`. |
+| 3 | Low | CSP origins accepted any scheme (`javascript://`, `data://`) and wildcards over a whole top-level domain (`https://*.com`), widening the page's sandbox. | Only `https`, `wss`, `http` and `ws`; a wildcard keeps at least two labels. |
+| 4 | Low (documentation) | Nothing warned that interface HTML must not embed untrusted data: the page can call tools through the host. | Responsibility 9 and module docs. |
+| 5 | Coverage | No fuzz target exercised the HTTP transport (headers, OAuth bearer parsing, legacy session tokens, SSE). | `http_request` fuzz target, with and without OAuth; a weekly 15-minute run of every target (`fuzz.yml`). |
+
+Checked without findings: `#![forbid(unsafe_code)]` workspace-wide; client
+errors built from input are sanitized where they are created; token
+rejection reasons are logged at debug level only and tokens never;
+`WWW-Authenticate` values come from validated URLs and scopes; HMAC
+comparisons are constant-time; every limit has a default and a setter;
+`cargo deny` and `cargo audit` are clean with the new `ring`, `rustls` and
+`hyper-rustls` dependencies.
+
+Accepted: no per-client rate limiting (put a reverse proxy in front of
+public deployments); an independent audit by a third party is still
+recommended before relying on the SDK for high-value systems.
 
 ### 2026-10-25: review of phases 4 to 6
 

@@ -259,7 +259,8 @@ fn recompute(prices: Vec<f64>) -> f64 { /* ... */ }
   `permissions` and `prefers_border` are also available.
 - `ui = ".."` on a tool shows its results in that interface;
   `visibility = ["app"]` leaves a tool to the interface and hides it from the
-  model.
+  model; clients without MCP Apps neither list nor call it. It is not access
+  control: protect sensitive tools with OAuth scopes.
 - The build fails if a tool names an interface that is not registered, or
   if an origin is malformed. The extension is declared in `server/discover`
   (and to 2025-11-25 hosts such as Claude Desktop) automatically.

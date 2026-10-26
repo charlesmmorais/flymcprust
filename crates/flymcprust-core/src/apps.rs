@@ -12,6 +12,13 @@
 //!   [`ToolDef::visibility`](crate::ToolDef::visibility).
 //!
 //! The server declares the extension in `server/discover` automatically.
+//! App-only tools (`visibility = ["app"]`) are left out of `tools/list` for
+//! clients that do not declare MCP Apps, which would otherwise offer them to
+//! the model; visibility is not access control (use OAuth scopes).
+//!
+//! The page runs in the host's sandbox but can call tools through it: do not
+//! paste untrusted data into its HTML (cross-site scripting would let an
+//! attacker call tools as the user). Send data in tool results instead.
 //! Tools with a UI must still return meaningful `content`: hosts without
 //! MCP Apps support show that text, and the model reads it. Check
 //! [`Ctx::client_supports_apps`](crate::Ctx::client_supports_apps) to adapt
@@ -249,13 +256,18 @@ fn is_origin(origin: &str) -> bool {
     let Some((scheme, host)) = origin.split_once("://") else {
         return false;
     };
-    let scheme_ok = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-        && scheme
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    // Web origins only: other schemes have no place in these directives.
+    let scheme_ok = matches!(scheme, "https" | "wss" | "http" | "ws");
     let host_ok = !host.is_empty()
         && host.chars().all(is_safe_char)
-        && host.trim_start_matches("*.").chars().all(|c| c != '*');
+        && match host.strip_prefix("*.") {
+            // A wildcard must keep at least two labels (`*.example.com`),
+            // not open a whole top-level domain (`*.com`).
+            Some(rest) => {
+                !rest.contains('*') && rest.split(':').next().is_some_and(|h| h.contains('.'))
+            }
+            None => !host.contains('*'),
+        };
     scheme_ok && host_ok
 }
 
@@ -296,11 +308,23 @@ pub(crate) fn mark_contents(contents: &mut [crate::resource::ResourceContents], 
             Item::Text(t) => (&mut t.meta, &mut t.mime_type),
             Item::Blob(b) => (&mut b.meta, &mut b.mime_type),
         };
-        mime.get_or_insert_with(|| MIME_TYPE.to_owned());
+        // Hosts render only this type; a handler cannot change it.
+        *mime = Some(MIME_TYPE.to_owned());
         meta.get_or_insert_with(Map::new)
             .entry("ui")
             .or_insert_with(|| ui.clone());
     }
+}
+
+/// Whether client capabilities declare MCP Apps with its MIME type.
+pub(crate) fn supported_by(capabilities: &crate::spec::ClientCapabilities) -> bool {
+    capabilities
+        .extensions
+        .as_ref()
+        .and_then(|e| e.get(EXTENSION_ID))
+        .and_then(|settings| settings.get("mimeTypes"))
+        .and_then(Value::as_array)
+        .is_some_and(|types| types.iter().any(|t| t.as_str() == Some(MIME_TYPE)))
 }
 
 impl Ctx {
@@ -309,13 +333,7 @@ impl Ctx {
     /// can return a richer text answer when it cannot.
     #[must_use]
     pub fn client_supports_apps(&self) -> bool {
-        self.client_capabilities()
-            .extensions
-            .as_ref()
-            .and_then(|e| e.get(EXTENSION_ID))
-            .and_then(|settings| settings.get("mimeTypes"))
-            .and_then(Value::as_array)
-            .is_some_and(|types| types.iter().any(|t| t.as_str() == Some(MIME_TYPE)))
+        supported_by(self.client_capabilities())
     }
 }
 
@@ -364,6 +382,9 @@ mod tests {
             "https://a.example.com/path",
             "https://*",
             "https://a.*.example.com",
+            "https://*.com",
+            "javascript://x",
+            "data://x",
             "",
         ] {
             assert!(

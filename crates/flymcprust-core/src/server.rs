@@ -615,6 +615,24 @@ impl ServerBuilder {
             ttl_ms: millis(self.list_ttl),
         };
         let tools_list = to_raw(&list).map_err(|e| BuildError::Serialize("tools/list", e))?;
+        let model_visible = |t: &&ToolDef| {
+            t.visibility
+                .as_ref()
+                .is_none_or(|v| v.contains(&crate::apps::Visibility::Model))
+        };
+        let tools_list_for_models = if tools.iter().all(|t| model_visible(&t)) {
+            None
+        } else {
+            let list = spec::ListToolsResult {
+                tools: tools
+                    .iter()
+                    .filter(model_visible)
+                    .map(|t| t.tool.clone())
+                    .collect(),
+                ..list
+            };
+            Some(to_raw(&list).map_err(|e| BuildError::Serialize("tools/list", e))?)
+        };
         let list_ttl_ms = millis(self.list_ttl);
 
         let resources_list = if has_resources {
@@ -671,6 +689,10 @@ impl ServerBuilder {
                 call: t.call,
                 mirrored,
                 scopes: t.scopes.into(),
+                app_only: t
+                    .visibility
+                    .as_ref()
+                    .is_some_and(|v| !v.contains(&crate::apps::Visibility::Model)),
             })
             .collect::<Box<[RegisteredTool]>>();
         let has_scopes = registry.iter().any(|t| !t.scopes.is_empty())
@@ -692,6 +714,7 @@ impl ServerBuilder {
                 state_hint: Once::new(),
                 discover,
                 tools_list,
+                tools_list_for_models,
                 resources_list,
                 templates_list,
                 prompts_list,
@@ -732,6 +755,9 @@ struct Inner {
     state_hint: Once,
     discover: Box<RawValue>,
     tools_list: Box<RawValue>,
+    /// `tools/list` without app-only tools, for clients without MCP Apps
+    /// (they would show those tools to the model). `None` if there are none.
+    tools_list_for_models: Option<Box<RawValue>>,
     resources_list: Option<Box<RawValue>>,
     templates_list: Option<Box<RawValue>>,
     prompts_list: Option<Box<RawValue>>,
@@ -747,6 +773,8 @@ struct RegisteredTool {
     call: CallFn,
     mirrored: Vec<MirroredParam>,
     scopes: Box<[String]>,
+    /// MCP Apps `visibility` without `model`: only an interface calls it.
+    app_only: bool,
 }
 
 struct RegisteredResource {
@@ -1152,12 +1180,7 @@ impl Server {
                 self.validate_meta(p.meta, &transport)?;
                 Ok(Some(self.inner.discover.clone()))
             }
-            methods::TOOLS_LIST => self.list(
-                &req.method,
-                params,
-                Some(&*self.inner.tools_list),
-                &transport,
-            ),
+            methods::TOOLS_LIST => self.list_tools(params, &transport),
             methods::TOOLS_CALL => {
                 let p: CallParams<'_> = parse_params(params)?;
                 let meta = self.validate_meta(p.meta, &transport)?;
@@ -1273,6 +1296,25 @@ impl Server {
             // Every list fits in one page, so no cursor is valid.
             return Err(McpError::invalid_params("Invalid cursor"));
         }
+        Ok(Some(body.to_owned()))
+    }
+
+    /// `tools/list`: clients without MCP Apps do not get app-only tools,
+    /// which they would otherwise offer to the model.
+    fn list_tools(
+        &self,
+        params: Option<&RawValue>,
+        transport: &TransportContext,
+    ) -> Result<Option<Box<RawValue>>, McpError> {
+        let p: ListParams<'_> = parse_params(params)?;
+        let meta = self.validate_meta(p.meta, transport)?;
+        if p.cursor.is_some() {
+            return Err(McpError::invalid_params("Invalid cursor"));
+        }
+        let body = match &self.inner.tools_list_for_models {
+            Some(for_models) if !crate::apps::supported_by(&meta.client_capabilities) => for_models,
+            _ => &self.inner.tools_list,
+        };
         Ok(Some(body.to_owned()))
     }
 
@@ -1437,6 +1479,7 @@ impl Server {
     ) -> Result<Option<Box<RawValue>>, HandlerError> {
         let tool = self
             .find_tool(name)
+            .filter(|t| !t.app_only || ctx.client_supports_apps())
             .ok_or_else(|| McpError::unknown_tool(name))?;
         authorize(&tool.scopes, &ctx)?;
 

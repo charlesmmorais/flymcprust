@@ -172,11 +172,15 @@ dependencies = [
 name = "flymcprust-fuzz"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "flymcprust-core",
+ "http",
+ "http-body-util",
  "libfuzzer-sys",
  "serde_json",
  "tokio",
  "tokio-util",
+ "tower-service",
 ]
 
 [[package]]

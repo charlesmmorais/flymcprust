@@ -59,13 +59,23 @@ fn server() -> Server {
         .unwrap()
 }
 
+/// A client of a host that renders MCP Apps.
+fn host() -> TestClient {
+    TestClient::new(server()).with_meta(json!({
+        "io.modelcontextprotocol/protocolVersion": spec::PROTOCOL_VERSION,
+        "io.modelcontextprotocol/clientCapabilities": { "extensions": {
+            "io.modelcontextprotocol/ui": { "mimeTypes": ["text/html;profile=mcp-app"] }
+        } },
+    }))
+}
+
 fn find<'a>(tools: &'a [spec::Tool], name: &str) -> &'a spec::Tool {
     tools.iter().find(|t| t.name == name).unwrap()
 }
 
 #[tokio::test]
 async fn tools_and_resources_carry_the_interface() {
-    let client = TestClient::new(server());
+    let client = host();
 
     let discover = client.discover().await.unwrap();
     let extensions = discover.capabilities.extensions.unwrap();
@@ -119,13 +129,7 @@ async fn tools_know_whether_the_host_renders_apps() {
             .contains("median")
     );
 
-    let host = TestClient::new(server()).with_meta(json!({
-        "io.modelcontextprotocol/protocolVersion": spec::PROTOCOL_VERSION,
-        "io.modelcontextprotocol/clientCapabilities": { "extensions": {
-            "io.modelcontextprotocol/ui": { "mimeTypes": ["text/html;profile=mcp-app"] }
-        } },
-    }));
-    let result = host
+    let result = host()
         .call_tool("price_survey", json!({ "item": "123" }))
         .await
         .unwrap();
@@ -134,6 +138,70 @@ async fn tools_know_whether_the_host_renders_apps() {
             .unwrap()
             .contains("table")
     );
+}
+
+/// Hosts without MCP Apps would offer app-only tools to the model, so they
+/// neither see nor call them.
+#[tokio::test]
+async fn app_only_tools_stay_out_of_reach_of_plain_clients() {
+    let plain = TestClient::new(server());
+    let names: Vec<String> = plain
+        .list_tools()
+        .await
+        .unwrap()
+        .tools
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(names, ["price_survey"]);
+    assert!(
+        plain
+            .call_tool("recompute", json!({ "sources": [1.0] }))
+            .await
+            .is_err()
+    );
+
+    let host = host();
+    assert_eq!(host.list_tools().await.unwrap().tools.len(), 2);
+    let result = host
+        .call_tool("recompute", json!({ "sources": [1.0, 3.0] }))
+        .await
+        .unwrap();
+    assert!(
+        serde_json::to_string(&result.content)
+            .unwrap()
+            .contains("\"2\"")
+    );
+}
+
+/// A handler cannot serve an interface with another MIME type.
+#[tokio::test]
+async fn interfaces_always_use_the_apps_mime_type() {
+    fn read(
+        uri: &str,
+        _: &flymcprust::UriVars,
+        _: Ctx,
+    ) -> Result<flymcprust::__private::ResourceFuture, ToolError> {
+        let mut text = spec::TextResourceContents::new(PAGE.to_owned(), uri.to_owned());
+        text.mime_type = Some("text/plain".to_owned());
+        Ok(Box::pin(async move {
+            Ok(vec![flymcprust::ResourceContents::Text(text)])
+        }))
+    }
+    let page = ResourceDef::new(
+        spec::Resource::new("page".to_owned(), "ui://x/page".to_owned()),
+        read,
+    )
+    .app(AppUi::new());
+    let client = TestClient::new(
+        Server::builder("s", "1")
+            .resource_def(page)
+            .build()
+            .unwrap(),
+    );
+    let read = client.read_resource("ui://x/page").await.unwrap();
+    let contents = serde_json::to_value(&read.contents[0]).unwrap();
+    assert_eq!(contents["mimeType"], apps::MIME_TYPE);
 }
 
 #[test]
