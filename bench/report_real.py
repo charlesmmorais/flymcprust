@@ -78,8 +78,9 @@ lines = [
     "FlyMCPRust and rmcp 3.7.0 serve the same 203 tools over Streamable HTTP/1.1 "
     "(MCP 2026-07-28, stateless, JSON responses). `+ JWT` targets require an RS256 "
     "access token on every request, checked by the same verifier in both servers. "
-    "`default limits` is FlyMCPRust without raising its secure defaults (64 concurrent "
-    "tool calls, 256 requests in flight, 1,024 connections).",
+    "`default limits` is FlyMCPRust without raising its secure defaults (until 0.1.0: "
+    "64 concurrent tool calls, 256 requests in flight, 1,024 connections; since 0.1.1: "
+    "1,024, 4,096 and 4,096, with request bodies limited to 64 MiB in total).",
     "",
     "## Startup and idle memory (203 tools)",
     "",

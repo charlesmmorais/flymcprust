@@ -9,9 +9,11 @@
 //! 1. `Origin` must be allowed (403); `Host` must be allowed (403).
 //! 2. Only `POST` (405); `OPTIONS` answers CORS preflights from allowed origins.
 //! 3. `Content-Type: application/json` (415); `Accept` must allow JSON (406).
-//! 4. At most [`HttpConfig::max_in_flight`] requests are processed at once
-//!    (503 beyond that); the body is read up to the message limit (413)
-//!    within [`HttpConfig::body_timeout`] (408).
+//! 4. At most [`HttpConfig::max_in_flight`] requests are processed at once,
+//!    and their bodies may total at most
+//!    [`HttpConfig::max_body_bytes_in_flight`] (503 beyond either); the body
+//!    is read up to the message limit (413) within
+//!    [`HttpConfig::body_timeout`] (408).
 //! 5. `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` and recognized
 //!    `Mcp-Param-*` headers must match the body (400, `-32020`).
 //! 6. The message is dispatched; notifications get `202`, unknown methods
@@ -43,7 +45,7 @@ use bytes::Bytes;
 use http::header::{self, HeaderMap, HeaderValue};
 use http::{Method, Request, Response, StatusCode};
 use http_body::Body;
-use http_body_util::{BodyExt as _, Full, LengthLimitError, Limited};
+use http_body_util::{BodyExt as _, Full};
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json::value::RawValue;
@@ -162,6 +164,7 @@ pub struct HttpConfig {
     header_timeout: Duration,
     body_timeout: Duration,
     max_in_flight: usize,
+    max_body_bytes_in_flight: usize,
     max_connections: usize,
 }
 
@@ -173,8 +176,9 @@ impl Default for HttpConfig {
             hosts: AllowedHosts::Localhost,
             header_timeout: Duration::from_secs(10),
             body_timeout: Duration::from_secs(30),
-            max_in_flight: 256,
-            max_connections: 1024,
+            max_in_flight: 4096,
+            max_body_bytes_in_flight: 64 * 1024 * 1024,
+            max_connections: 4096,
         }
     }
 }
@@ -226,17 +230,29 @@ impl HttpConfig {
         self
     }
 
-    /// Maximum number of requests being read or processed at once, which
-    /// bounds the memory used for request bodies (each up to the message
-    /// limit). Further requests get `503`. Default: 256.
+    /// Maximum number of requests being read or processed at once. Further
+    /// requests get `503`. Default: 4096. Memory is bounded separately by
+    /// [`max_body_bytes_in_flight`](Self::max_body_bytes_in_flight), so
+    /// requests that wait on other services can be numerous.
     #[must_use]
     pub fn max_in_flight(mut self, requests: usize) -> Self {
         self.max_in_flight = requests.max(1);
         self
     }
 
+    /// Maximum total size of the request bodies held at once (being read,
+    /// parsed or handled). A request reserves its `Content-Length`, or the
+    /// whole message limit when the length is unknown, and gets `503` when
+    /// the budget is spent. Values below the message limit are raised to it.
+    /// Default: 64 MiB.
+    #[must_use]
+    pub fn max_body_bytes_in_flight(mut self, bytes: usize) -> Self {
+        self.max_body_bytes_in_flight = bytes;
+        self
+    }
+
     /// Maximum number of open connections in [`serve`]; further connections
-    /// wait in the operating system's accept queue. Default: 1024.
+    /// wait in the operating system's accept queue. Default: 4096.
     #[must_use]
     pub fn max_connections(mut self, connections: usize) -> Self {
         self.max_connections = connections.max(1);
@@ -250,6 +266,9 @@ pub struct StreamableHttpService {
     server: Server,
     config: Arc<HttpConfig>,
     in_flight: Arc<Semaphore>,
+    /// One permit per byte of request body held (see
+    /// [`HttpConfig::max_body_bytes_in_flight`]).
+    body_bytes: Arc<Semaphore>,
     hints: Arc<Hints>,
     /// Server-to-client requests of legacy sessions awaiting an answer.
     pending: Arc<PendingRequests>,
@@ -299,7 +318,14 @@ impl StreamableHttpService {
             }
             None => {}
         }
+        // A budget smaller than one message would refuse legitimate
+        // requests forever.
+        let body_budget = config
+            .max_body_bytes_in_flight
+            .max(server.limits().max_message_bytes)
+            .min(Semaphore::MAX_PERMITS);
         Self {
+            body_bytes: Arc::new(Semaphore::new(body_budget)),
             server,
             in_flight: Arc::new(Semaphore::new(config.max_in_flight)),
             config: Arc::new(config),
@@ -414,16 +440,7 @@ impl StreamableHttpService {
                 "raise HttpConfig::max_in_flight(..) if the machine has room, or run more \
                  instances",
             );
-            let mut response = rpc_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                None,
-                &McpError::internal_with_message("The server is busy; retry later."),
-                cors.as_ref(),
-            );
-            response
-                .headers_mut()
-                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
-            return response;
+            return busy(cors.as_ref());
         };
 
         // Authorization comes before the body is read: unauthenticated
@@ -442,7 +459,33 @@ impl StreamableHttpService {
         };
 
         let limits = self.server.limits();
-        let read = Limited::new(body, limits.max_message_bytes).collect();
+        let declared = parts
+            .headers
+            .get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        let too_large = || {
+            hints::warn_once(
+                &self.hints.too_large,
+                format_args!(
+                    "rejected a request body over the {}-byte message limit (HTTP 413)",
+                    limits.max_message_bytes
+                ),
+                "raise ServerBuilder::max_message_bytes(..) if clients legitimately                  send larger arguments",
+            );
+            rpc_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                None,
+                &McpError::invalid_request("Message too large"),
+                cors.as_ref(),
+            )
+        };
+        if declared.is_some_and(|len| len > limits.max_message_bytes as u64) {
+            return too_large();
+        }
+        // Each frame reserves its size in the memory budget as it arrives,
+        // so a client that sends slowly holds only what it sent.
+        let read = read_body(body, limits.max_message_bytes, Arc::clone(&self.body_bytes));
         let Ok(read) = tokio::time::timeout(self.config.body_timeout, read).await else {
             hints::warn_once(
                 &self.hints.slow_body,
@@ -459,27 +502,26 @@ impl StreamableHttpService {
                 cors.as_ref(),
             );
         };
-        let bytes = match read {
-            Ok(collected) => collected.to_bytes(),
-            Err(error) => {
-                let (status, message) = if error.downcast_ref::<LengthLimitError>().is_some() {
-                    hints::warn_once(
-                        &self.hints.too_large,
-                        format_args!(
-                            "rejected a request body over the {}-byte message limit (HTTP 413)",
-                            limits.max_message_bytes
-                        ),
-                        "raise ServerBuilder::max_message_bytes(..) if clients legitimately \
-                         send larger arguments",
-                    );
-                    (StatusCode::PAYLOAD_TOO_LARGE, "Message too large")
-                } else {
-                    (StatusCode::BAD_REQUEST, "Could not read the request body")
-                };
+        // The reservation lasts as long as this request is handled.
+        let (bytes, _body_permit) = match read {
+            Ok(read) => read,
+            Err(BodyError::TooLarge) => return too_large(),
+            Err(BodyError::Busy) => {
+                hints::warn_once(
+                    &self.hints.busy,
+                    format_args!(
+                        "rejected a request: request bodies in flight reached {} bytes                          (HTTP 503)",
+                        self.config.max_body_bytes_in_flight
+                    ),
+                    "raise HttpConfig::max_body_bytes_in_flight(..) if the machine has memory                      to spare, or run more instances",
+                );
+                return busy(cors.as_ref());
+            }
+            Err(BodyError::Read) => {
                 return rpc_error(
-                    status,
+                    StatusCode::BAD_REQUEST,
                     None,
-                    &McpError::invalid_request(message),
+                    &McpError::invalid_request("Could not read the request body"),
                     cors.as_ref(),
                 );
             }
@@ -1385,6 +1427,68 @@ fn with_cors(response: &mut Response<HttpBody>, origin: Option<&HeaderValue>) {
             HeaderValue::from_static("www-authenticate, mcp-session-id"),
         );
     }
+}
+
+/// Why a request body could not be read.
+enum BodyError {
+    /// Over the message limit (`413`).
+    TooLarge,
+    /// The memory budget for bodies is spent (`503`).
+    Busy,
+    /// The connection failed while reading (`400`).
+    Read,
+}
+
+/// Reads a body up to `limit` bytes, reserving each frame's size in
+/// `budget` as it arrives. Returns the body and its reservation.
+async fn read_body<B>(
+    body: B,
+    limit: usize,
+    budget: Arc<Semaphore>,
+) -> Result<(Bytes, Option<OwnedSemaphorePermit>), BodyError>
+where
+    B: Body,
+{
+    let mut body = std::pin::pin!(body);
+    let mut buffer = bytes::BytesMut::new();
+    let mut reserved: Option<OwnedSemaphorePermit> = None;
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|_| BodyError::Read)?;
+        let Ok(data) = frame.into_data() else {
+            continue; // trailers
+        };
+        let len = bytes::Buf::remaining(&data);
+        if len == 0 {
+            continue;
+        }
+        if buffer.len().saturating_add(len) > limit {
+            return Err(BodyError::TooLarge);
+        }
+        let size = u32::try_from(len).map_err(|_| BodyError::TooLarge)?;
+        let permit = Arc::clone(&budget)
+            .try_acquire_many_owned(size)
+            .map_err(|_| BodyError::Busy)?;
+        match &mut reserved {
+            Some(held) => held.merge(permit),
+            None => reserved = Some(permit),
+        }
+        bytes::BufMut::put(&mut buffer, data);
+    }
+    Ok((buffer.freeze(), reserved))
+}
+
+/// `503` with `Retry-After`: the server is at capacity.
+fn busy(cors: Option<&HeaderValue>) -> Response<HttpBody> {
+    let mut response = rpc_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        None,
+        &McpError::internal_with_message("The server is busy; retry later."),
+        cors,
+    );
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    response
 }
 
 /// A `401`/`403`/`400`/`503` answer to a request that failed authorization.

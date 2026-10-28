@@ -233,13 +233,14 @@ bytes ─► size limit ─► depth pre-scan ─► JSON-RPC envelope parse
 | Maximum message size (HTTP body / stdio line) | 4 MiB |
 | Maximum JSON nesting depth | 64 |
 | Per-handler timeout (tools, resources, prompts) | 30 s |
-| Maximum concurrent handler invocations | 64 |
+| Maximum concurrent handler invocations | 1024 |
 | HTTP bind address | `127.0.0.1` |
 | Allowed `Origin`s and `Host`s | localhost only (absent `Origin` accepted) |
 | HTTP header timeout (from connection open or idle) | 10 s |
 | HTTP body timeout | 30 s |
-| HTTP requests being read or processed | 256 |
-| HTTP open connections (built-in server) | 1024 |
+| HTTP requests being read or processed | 4096 |
+| HTTP request bodies held at once | 64 MiB |
+| HTTP open connections (built-in server) | 4096 |
 | `requestState` lifetime | 10 min |
 
 The threat model behind these defaults is in [SECURITY.md](SECURITY.md).
@@ -323,9 +324,11 @@ Request handling, in order:
    preflights from allowed origins.
 3. `Content-Type: application/json` is required (`415`), and `Accept`, when
    present, must allow `application/json` (`406`).
-4. At most 256 requests are read or processed at once (`503`). The body is
-   read with `http-body-util::Limited` within the body timeout; an oversized
-   body gets `413`, a slow one `408`.
+4. At most 4096 requests are read or processed at once, and their bodies
+   may total at most 64 MiB (`503` beyond either). The body is read frame
+   by frame within the body timeout, each frame reserving its size in that
+   budget as it arrives; a declared or actual size over the message limit
+   gets `413`, a slow body `408`.
 5. Header and body validation:
    - `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` are decoded (base64
      sentinel) and compared with the body. A missing or mismatching header gets
@@ -521,6 +524,7 @@ exception to the safety rules is needed.
 | 2026-10-25 | MRTR uses the *replay* model (chosen by the owner): `ctx.elicit(key, msg).await?` returns the answer if the client sent it (this round or an earlier one), otherwise records the request and ends the round with an internal "input required" error that the runtime turns into `InputRequiredResult`. Handlers rerun from the start each round, so code before an input call must be idempotent. Questions awaited together (`tokio::join!`) share a round. This replaces the planned `ToolOutput::InputRequired`: an error kind propagates with `?` through any return type. |
 | 2026-10-25 | `requestState` is always emitted and carries the answers of earlier rounds, so the server stays stateless. It is HMAC-SHA256 signed (`hmac` + `sha2`, chosen by the owner) and bound to the method, the target (tool/prompt name or resource URI), a digest of the arguments (whitespace- and key-order-insensitive) and an expiry (default 10 min). Failed verification is `-32602`. The key is random per process unless `request_state_key` (at least 32 bytes) is set, which multi-instance deployments need. Binding to the authenticated principal (a spec SHOULD) waits for OAuth. |
 | 2026-10-25 | Answers in the current round's `inputResponses` need no state: they are client input like arguments. Unknown keys are ignored; a missing answer is asked again; an answer that does not decode is `-32602`. Input requests check the client capabilities first (`-32021` otherwise). Sampling and roots helpers are `#[deprecated]` like the features (SEP-2577). |
+| 2026-10-28 | Higher concurrency defaults, memory bounded in bytes (chosen by the owner). The real-world benchmark showed that 64 concurrent tool calls and 256 requests in flight capped servers whose tools wait on other services (about 3,000 requests per second with a 20 ms upstream, and mass `503`s at 1,024 clients). The request count was standing in for a memory bound (256 × 4 MiB = 1 GiB worst case); memory is now bounded directly: request bodies held at once may total 64 MiB, reserved frame by frame as bytes arrive (a client that declares a large body and sends it slowly holds only what it sent, so the budget cannot be pinned cheaply). With memory bounded in bytes, the counts rise: 1024 concurrent calls, 4096 requests in flight, 4096 connections. Worst-case body memory falls from 1 GiB to 64 MiB. |
 | 2026-10-27 | MCP Apps app-only tools are listed and callable for every client (chosen by the owner). The audit of 2026-10-26 had hidden them from clients that do not declare the extension, but the official test host (`ext-apps/examples/basic-host`) renders interfaces without declaring it, so the interface's calls failed; other hosts may do the same. Compatibility wins: hosts that render interfaces hide app-only tools from the model, and visibility was never access control (OAuth scopes are). Found by running `examples/apps-demo` in that host. |
 | 2026-10-25 | MCP Apps (chosen by the owner, for assistants that need forms, editable tables or previews beyond what elicitation expresses): declared in the macros (`#[tool(ui = .., visibility = [..])]`, `#[resource("ui://..", app, csp_connect = [..], ..)]`) and in the builders (`ToolDef::ui`, `ToolDef::visibility`, `ResourceDef::app` with `AppUi`). Interfaces are fixed `ui://` resources served as `text/html;profile=mcp-app`, with `_meta.ui` on the declaration and repeated in read results, as the extension requires. The build checks that each tool's interface is a registered app resource and that CSP origins are `scheme://host[:port]` (hosts paste them into a Content Security Policy, so separators or quotes could widen it). The extension is declared automatically in `server/discover`, and also to 2025-11-25 clients: MCP Apps hosts (Claude Desktop among them) negotiate it on that version, so the legacy adapter keeps this one extension. Tools also carry the deprecated flat `ui/resourceUri` key until the extension's final release drops it. `tools/list` stays pre-serialized and identical for every client: hosts without MCP Apps ignore `_meta.ui`, and tools must return text anyway; `ctx.client_supports_apps()` lets a tool adapt its text. Subscriptions and the Tasks extension stay out (see the README). |
 | 2026-10-25 | JWT verification (chosen by the owner): our own minimal JWS verifier on `ring`, not `jsonwebtoken`. With its pure-Rust backend, `jsonwebtoken` pulls the `rsa` crate, which `cargo deny` rejects (RUSTSEC-2023-0071 and RUSTSEC-2026-0387, unfixed); its `aws-lc-rs` backend needs a C toolchain with CMake (and NASM on Windows). `ring` is already the TLS provider, so the feature adds about 50 crates and no advisory. The verifier supports only asymmetric algorithms (RS/PS 256–512, ES256/384, EdDSA), so `none` and HMAC confusion are impossible; RSA keys under 2048 bits, encryption keys, `crit` headers and JWE are refused; keys never come from token headers (`jku`, `x5u`, `jwk`). Keys are discovered from the issuer's metadata in the order the MCP spec gives, the metadata must name the configured issuer (mix-up protection), and HTTPS uses rustls with the system's roots (no `webpki-roots`, whose CDLA license `deny.toml` does not allow). Keys are cached for an hour; an unknown `kid` triggers at most one refetch per 30 s, and fetch failures keep the previous keys. Documents are limited to 512 KiB and 5 s, and redirects are not followed. A fuzz target (`verify_jwt`) checks that no input panics or is accepted. |

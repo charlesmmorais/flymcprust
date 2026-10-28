@@ -19,7 +19,10 @@ pub struct Limits {
     pub max_json_depth: usize,
     /// Maximum time a single tool call may run.
     pub tool_timeout: Duration,
-    /// Maximum number of tool calls executing at the same time.
+    /// Maximum number of tool calls executing at the same time. Calls
+    /// waiting on other services hold a slot while they wait, so the default
+    /// leaves room for them; memory is bounded by the transports (see
+    /// `HttpConfig::max_body_bytes_in_flight`).
     pub max_concurrent_calls: usize,
 }
 
@@ -29,7 +32,7 @@ impl Default for Limits {
             max_message_bytes: 4 * 1024 * 1024,
             max_json_depth: 64,
             tool_timeout: Duration::from_secs(30),
-            max_concurrent_calls: 64,
+            max_concurrent_calls: 1024,
         }
     }
 }

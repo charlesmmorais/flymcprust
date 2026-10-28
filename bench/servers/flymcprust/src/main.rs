@@ -7,8 +7,10 @@
 //!
 //! `real` adds the real-world tools (200 generated tools, a complex payload,
 //! an upstream call); `oauth` requires an RS256 JWT on every request;
-//! `defaults` keeps the SDK's default limits (64 concurrent tool calls, 256
-//! requests in flight, 1024 connections) instead of raising them.
+//! `defaults` keeps the SDK's default limits instead of raising them (in
+//! 0.1.0: 64 concurrent tool calls, 256 requests in flight, 1024
+//! connections; since 0.1.1: 1024, 4096 and 4096, with request bodies
+//! limited to 64 MiB in total).
 mod many;
 mod real;
 mod upstream;

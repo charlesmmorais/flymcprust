@@ -488,13 +488,13 @@ What the numbers say, including where FlyMCPRust does not lead:
 - **Authentication narrows the gap**, since verifying a signature costs the
   same in both servers.
 - **Large payloads over HTTP are slightly faster with rmcp** (0.8–0.9×).
-- **FlyMCPRust's default limits are too conservative for servers that wait
-  on other services.** They allow 64 concurrent tool calls and 256 requests
-  in flight; with a 20 ms upstream that caps the server at about 3,000
-  requests per second, and at 1,024 clients it rejects most requests with
-  `503` (by design, but useful throughput collapses when clients retry
-  without backing off). Raise `max_concurrent_calls` and
-  `HttpConfig::max_in_flight` for such servers.
+- **FlyMCPRust 0.1.0's default limits were too conservative for servers
+  that wait on other services.** 64 concurrent tool calls and 256 requests
+  in flight capped the server at about 3,000 requests per second with a
+  20 ms upstream, and at 1,024 clients it rejected most requests with `503`
+  ("default limits" rows of the tables). Since 0.1.1 memory is bounded in
+  bytes instead (64 MiB of request bodies at once), and the defaults allow
+  1024 concurrent calls and 4096 requests in flight.
 - **Earlier runs overstated the lead.** Our rmcp benchmark servers used
   `#[tool_router(server_handler)]`, which rebuilds the tool router on every
   request; they now keep it, as a production server would. The fix lowered

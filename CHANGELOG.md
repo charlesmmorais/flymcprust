@@ -5,6 +5,30 @@ All notable changes to FlyMCPRust are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (before 1.0, minor versions may
 break the API).
 
+## [Unreleased]
+
+### Changed
+
+- Higher concurrency defaults, with memory bounded in bytes: request bodies
+  held at once may total 64 MiB (`HttpConfig::max_body_bytes_in_flight`,
+  new), reserved frame by frame as they arrive; `max_concurrent_calls`
+  1024 (was 64), `HttpConfig::max_in_flight` 4096 (was 256),
+  `HttpConfig::max_connections` 4096 (was 1024). Servers whose tools wait
+  on other services were capped by the old defaults.
+- MCP Apps app-only tools (`visibility = ["app"]`) are listed and callable
+  for every client: some hosts render interfaces without declaring the
+  extension.
+
+### Fixed
+
+- `#[tool]`, `#[resource]` and `#[prompt]` handlers with a parameter named
+  like the function (`fn user(user: User)`) did not compile.
+
+### Added
+
+- `examples/apps-demo`: a runnable MCP Apps server, tested in the official
+  MCP Apps test host.
+
 ## [0.1.0] - 2026-10-26
 
 First release: a high-performance MCP server SDK for Rust, targeting
@@ -49,4 +73,5 @@ protocol revision 2026-07-28.
 - Three recorded security reviews (see `docs/SECURITY.md`) and five fuzz
   targets.
 
+[Unreleased]: https://github.com/charlesmmorais/flymcprust/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/charlesmmorais/flymcprust/releases/tag/v0.1.0

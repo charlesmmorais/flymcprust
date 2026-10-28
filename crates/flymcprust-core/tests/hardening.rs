@@ -137,3 +137,102 @@ async fn oversized_legacy_declarations_are_refused() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(!response.headers().contains_key("mcp-session-id"));
 }
+
+/// A request body that sends `first` and then waits until `rest` is
+/// dropped, like a client sending slowly.
+fn trickle(
+    first: usize,
+) -> (
+    tokio::sync::mpsc::Sender<Bytes>,
+    http_body_util::StreamBody<
+        impl futures_util::Stream<Item = Result<http_body::Frame<Bytes>, std::convert::Infallible>>
+        + Send
+        + 'static,
+    >,
+) {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(4);
+    tx.try_send(Bytes::from(vec![b' '; first])).unwrap();
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv()
+            .await
+            .map(|chunk| (Ok(http_body::Frame::data(chunk)), rx))
+    });
+    (tx, http_body_util::StreamBody::new(stream))
+}
+
+fn post_body<B>(body: B, length: Option<usize>) -> Request<B> {
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri("/mcp")
+        .header("host", "localhost")
+        .header("content-type", "application/json");
+    if let Some(length) = length {
+        request = request.header("content-length", length);
+    }
+    request.body(body).unwrap()
+}
+
+fn small_server() -> Server {
+    Server::builder("budget", "1.0.0")
+        .max_message_bytes(1024)
+        .build()
+        .unwrap()
+}
+
+/// Bodies held at once are bounded in bytes: when the budget is spent,
+/// further requests get 503 until it is released.
+#[tokio::test]
+async fn request_bodies_share_a_memory_budget() {
+    let service = StreamableHttpService::with_config(
+        small_server(),
+        HttpConfig::new().max_body_bytes_in_flight(1024),
+    );
+    // 1,000 bytes received and held by a body that never ends.
+    let (rest, body) = trickle(1000);
+    let mut first = service.clone();
+    let held = tokio::spawn(async move { first.call(post_body(body, None)).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mut other = service.clone();
+    let body = Full::new(Bytes::from(vec![b' '; 100]));
+    let response = other.call(post_body(body, None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // Once the slow request ends, its bytes are released.
+    drop(rest);
+    let _ = held.await.unwrap();
+    let body = Full::new(Bytes::from(vec![b' '; 100]));
+    let response = other.call(post_body(body, None)).await.unwrap();
+    assert_ne!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// A client that declares a large body but sends it slowly (slow loris)
+/// reserves only the bytes it actually sent.
+#[tokio::test]
+async fn slow_bodies_hold_only_what_they_sent() {
+    let service = StreamableHttpService::with_config(
+        small_server(),
+        HttpConfig::new().max_body_bytes_in_flight(1024),
+    );
+    let (rest, body) = trickle(10);
+    let mut slow = service.clone();
+    let held = tokio::spawn(async move { slow.call(post_body(body, Some(1000))).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mut other = service.clone();
+    let body = Full::new(Bytes::from(vec![b' '; 900]));
+    let response = other.call(post_body(body, Some(900))).await.unwrap();
+    assert_ne!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    drop(rest);
+    let _ = held.await;
+}
+
+/// A declared length over the message limit is refused before reading.
+#[tokio::test]
+async fn oversized_declared_lengths_are_refused_up_front() {
+    let mut service = StreamableHttpService::new(small_server());
+    let (_rest, body) = trickle(1);
+    let response = service.call(post_body(body, Some(5000))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
