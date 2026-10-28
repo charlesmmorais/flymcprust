@@ -17,9 +17,13 @@ RS256 JWT ([`fixtures/token.txt`](fixtures/token.txt), verified against
 same release profile (`lto = "thin"`, `codegen-units = 1`) and hyper's
 HTTP/1.1 server.
 
-Results, with raw data next to each: [x86-64](results/2026-10-26-x86_64/RESULTS.md)
-and [ARM64](results/2026-10-26-aarch64/RESULTS.md) GitHub Actions runners
-(2026-10-26); earlier runs in [results/archive](results/archive).
+Results, with raw data next to each, from GitHub Actions runners
+(2026-10-26, commit `47f1c60`): x86-64
+([basic](results/2026-10-26-47f1c60-x86_64/basic/RESULTS.md),
+[real-world](results/2026-10-26-47f1c60-x86_64/real/RESULTS.md)) and ARM64
+([basic](results/2026-10-26-47f1c60-aarch64/basic/RESULTS.md),
+[real-world](results/2026-10-26-47f1c60-aarch64/real/RESULTS.md)); earlier
+runs in [results/archive](results/archive).
 
 ## Run it
 
@@ -112,7 +116,7 @@ its default limits. Report: `python bench/report_real.py`.
 
 The rmcp servers keep their tool router in the handler. rmcp's
 `#[tool_router(server_handler)]` shortcut rebuilds the router on every
-request; the benchmarks before 2026-10-27 used it, which inflated
+request; the runs before commit `47f1c60` used it, which inflated
 FlyMCPRust's lead (see the archived results).
 
 ## Independent runs

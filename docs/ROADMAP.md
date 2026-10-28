@@ -44,12 +44,15 @@ First results (laptop, 64 clients): 1.6–1.9× the throughput of `rmcp` with
 and 22–39× the throughput of the Python SDK. On a Linux CI runner: 2.4–2.6×
 rmcp's throughput with 3.2–4.1× less CPU on small messages.
 
-Validation run (2026-10-26, x86-64 and ARM64 runners, separate CPUs for
-server and load generator, median of 3 runs): 2.5–3.3× rmcp over HTTP and
-6–11× over stdio on small messages, parity on 64 KiB payloads; the stdio
-run found and fixed a write bottleneck (13× on small messages). Next:
-real-world scenarios (authentication on both SDKs, 200 tools, 4,096
-connections, complex payloads, external calls, mixed load).
+Validation and real-world runs (2026-10-26, x86-64 and ARM64 runners,
+separate CPUs, median of 3 runs): 1.9–2.6× rmcp over HTTP and 5–10× over
+stdio on small messages on x86-64, 0.8–0.9× on 64 KiB over HTTP; in the
+real-world suite 2.5–6× with many tools, nested payloads and thousands of
+connections, parity when tools wait on an upstream (with half the CPU).
+They found and fixed a stdio write bottleneck, an unfair rmcp benchmark
+server (router rebuilt per request), and a macro bug; they also showed that
+the default concurrency limits are too low for servers that wait on other
+services (decision pending).
 
 ### 4. Compatibility with 2025-11-25 clients (done)
 

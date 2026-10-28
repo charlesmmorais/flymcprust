@@ -434,58 +434,78 @@ async fn adds() {
 
 ### Against rmcp and the official Python SDK
 
-[`bench/`](bench) runs the same server (same tools, MCP 2026-07-28,
-stateless) written with FlyMCPRust, `rmcp` 3.7.0 and the official Python SDK
-`mcp` 2.3.0, over Streamable HTTP/1.1 and stdio, under one load generator.
-Latest run (2026-10-26, GitHub Actions, 4-core runners, server and load
-generator on separate CPUs, median of 3 runs, 0 errors):
-[x86-64](bench/results/2026-10-26-x86_64/RESULTS.md) (AMD EPYC) and
-[ARM64](bench/results/2026-10-26-aarch64/RESULTS.md) (Neoverse-N2).
+[`bench/`](bench) runs the same server written with FlyMCPRust, `rmcp` 3.7.0
+and the official Python SDK `mcp` 2.3.0 (MCP 2026-07-28, stateless), under
+one load generator. Latest run: 2026-10-26, commit `47f1c60`, GitHub Actions
+4-core runners with the server and the load generator on separate CPUs,
+median of 3 runs. Full tables: x86-64
+([basic](bench/results/2026-10-26-47f1c60-x86_64/basic/RESULTS.md),
+[real-world](bench/results/2026-10-26-47f1c60-x86_64/real/RESULTS.md)) and
+ARM64 ([basic](bench/results/2026-10-26-47f1c60-aarch64/basic/RESULTS.md),
+[real-world](bench/results/2026-10-26-47f1c60-aarch64/real/RESULTS.md)).
 
-Streamable HTTP, 64 concurrent clients, x86-64:
-
-| Scenario | FlyMCPRust req/s | rmcp req/s | Python req/s | vs rmcp | vs Python |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `tools/list` | 165,345 | 54,108 | 4,066 | 3.1× | 41× |
-| `tools/call` (trivial tool) | 146,494 | 44,731 | 3,068 | 3.3× | 48× |
-| `tools/call` (structured output) | 91,940 | 36,370 | 2,716 | 2.5× | 34× |
-| `tools/call` (64 KiB in and out) | 18,118 | 16,759 | 1,679 | 1.1× | 11× |
-
-stdio, 64 requests in flight, x86-64:
+**Protocol overhead** (three small tools), 64 concurrent clients, x86-64:
 
 | Scenario | FlyMCPRust req/s | rmcp req/s | Python req/s | vs rmcp | vs Python |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `tools/list` | 261,753 | 23,816 | 2,630 | 11× | 100× |
-| `tools/call` (trivial tool) | 235,138 | 25,307 | 2,319 | 9.3× | 101× |
-| `tools/call` (structured output) | 134,121 | 22,368 | 2,148 | 6.0× | 62× |
-| `tools/call` (64 KiB in and out) | 10,989 | 4,500 | 1,684 | 2.4× | 6.5× |
+| HTTP `tools/list` | 86,552 | 33,184 | 2,223 | 2.6× | 39× |
+| HTTP `tools/call` (trivial tool) | 66,276 | 33,194 | 1,742 | 2.0× | 38× |
+| HTTP `tools/call` (structured output) | 44,799 | 23,848 | 1,556 | 1.9× | 29× |
+| HTTP `tools/call` (64 KiB in and out) | 7,653 | 8,546 | 896 | **0.9×** | 8.5× |
+| stdio `tools/list` | 149,155 | 15,515 | 1,158 | 9.6× | 129× |
+| stdio `tools/call` (trivial tool) | 128,320 | 16,100 | 1,054 | 8.0× | 122× |
+| stdio `tools/call` (structured output) | 74,189 | 14,550 | 999 | 5.1× | 74× |
+| stdio `tools/call` (64 KiB in and out) | 4,532 | 3,020 | 738 | 1.5× | 6.1× |
 
-- **CPU per request** falls in the same proportion (2.5–3.3× less than rmcp
-  over HTTP on small messages, 5–9× over stdio), and **memory under load** is
-  2.5–3× lower than rmcp's over HTTP (17.6 MiB against 44.7 MiB for the
-  trivial tool).
-- **High concurrency**: at 1,024 clients FlyMCPRust keeps 97–100% of its
-  64-client throughput.
-- **ARM64** shows the same picture: 2.9–4.8× rmcp over HTTP and 3.1–6.2× over
-  stdio on small messages.
-- **Large payloads** are on par with rmcp over HTTP (1.0–1.1×): the time goes
-  into JSON parsing and serialization, which both SDKs share through
-  `serde_json`.
-- **OAuth has a real cost.** Verifying an RS256 token on every request takes
-  the trivial tool from 146,494 to 44,964 req/s (31 ms more CPU per 1,000
-  requests): the signature check dominates. That is about what rmcp does
-  *without* authentication; a comparison with authentication on both SDKs
-  is the next benchmark.
-- **Startup, idle memory and binary size** are close to rmcp's (about 4 ms,
-  5 MiB and 4.8 MiB; rmcp 4.3 MiB); Python needs 0.8 s and 73 MiB.
+On ARM64: 2.3–4.1× rmcp over HTTP and 3.0–6.2× over stdio on small
+messages; 64 KiB payloads 0.8× over HTTP and 1.8× over stdio.
 
-These are protocol-overhead benchmarks: the tools do almost nothing, so in
-a real server, tool work (database, network) narrows the gaps. Shared
-runners vary from run to run (the spread column of the full tables shows by
-how much; 0–5% here). Reproduce with the commands in
-[bench/README.md](bench/README.md), which also explains the method and how
-to send independent results. Earlier runs are kept in
-[bench/results/archive](bench/results/archive).
+**Real-world scenarios**: FlyMCPRust and rmcp serving the same 203 tools,
+x86-64 (ARM64 in brackets). "With JWT" means both servers verify an RS256
+access token on every request with the same verifier:
+
+| Scenario | vs rmcp | vs rmcp, both with JWT |
+| --- | ---: | ---: |
+| `tools/list` of 200 tools (~100 KB) | 6.0× [8.1×] | 3.3× [3.9×] |
+| Calling the last of 200 tools | 2.5× [4.0×] | 1.2× [2.1×] |
+| Nested ~10 KB order (40 lines, enums) | 3.4× [3.6×] | 2.4× [3.3×] |
+| 1,024 / 4,096 keep-alive connections | 3.5× [5.6–5.8×] | 1.4–1.5× [2.6×] |
+| A new connection per request | 1.2× [2.1×] | 1.4× [2.3×] |
+| Tools waiting 20 ms on an HTTP upstream, 64 / 256 clients | 1.0× [1.0×], with 1.9–2.1× less CPU | 1.0× [1.1×] |
+| Same, 1,024 clients | 2.3× [3.0×], p99 63 ms vs 218 ms | 1.5× [2.1×] |
+| Mixed load (calls, orders, upstream, listing), 64 / 1,024 clients | 1.5× / 4.1× [1.5× / 4.2×] | 1.7× / 2.2× [1.7× / 3.0×] |
+
+What the numbers say, including where FlyMCPRust does not lead:
+
+- **The gap grows with realistic servers**: many tools, nested payloads and
+  thousands of connections favor FlyMCPRust's pre-serialized lists and
+  allocation-conscious dispatch. With 4,096 connections it uses 76 MiB
+  against rmcp's 546 MiB.
+- **Waiting on other services evens throughput out**: when tools spend 20 ms
+  on an upstream, both SDKs serve the same requests per second at moderate
+  concurrency; FlyMCPRust needs half the CPU, and pulls ahead only when
+  concurrency gets high.
+- **Authentication narrows the gap**, since verifying a signature costs the
+  same in both servers.
+- **Large payloads over HTTP are slightly faster with rmcp** (0.8–0.9×).
+- **FlyMCPRust's default limits are too conservative for servers that wait
+  on other services.** They allow 64 concurrent tool calls and 256 requests
+  in flight; with a 20 ms upstream that caps the server at about 3,000
+  requests per second, and at 1,024 clients it rejects most requests with
+  `503` (by design, but useful throughput collapses when clients retry
+  without backing off). Raise `max_concurrent_calls` and
+  `HttpConfig::max_in_flight` for such servers.
+- **Earlier runs overstated the lead.** Our rmcp benchmark servers used
+  `#[tool_router(server_handler)]`, which rebuilds the tool router on every
+  request; they now keep it, as a production server would. The fix lowered
+  FlyMCPRust's HTTP lead on small messages from 2.5–3.3× to 1.9–2.6× on
+  x86-64. Earlier results are kept in [bench/results/archive](bench/results/archive).
+- **Peak memory** in the real-world tables is the process's high-water mark
+  and includes earlier workloads of the same run; compare it at the
+  highest concurrency level.
+
+These remain synthetic workloads on shared runners. Reproduce or challenge
+them with the commands in [bench/README.md](bench/README.md).
 
 ### Micro-benchmarks
 
