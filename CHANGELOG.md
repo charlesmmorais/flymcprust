@@ -5,7 +5,7 @@ All notable changes to FlyMCPRust are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (before 1.0, minor versions may
 break the API).
 
-## [Unreleased]
+## [0.1.1] - 2026-10-28
 
 ### Changed
 
@@ -73,5 +73,5 @@ protocol revision 2026-07-28.
 - Three recorded security reviews (see `docs/SECURITY.md`) and five fuzz
   targets.
 
-[Unreleased]: https://github.com/charlesmmorais/flymcprust/compare/v0.1.0...HEAD
+[0.1.1]: https://github.com/charlesmmorais/flymcprust/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/charlesmmorais/flymcprust/releases/tag/v0.1.0

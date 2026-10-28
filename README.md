@@ -9,7 +9,7 @@ FAST · SAFE · SIMPLE · STATELESS
 > Build [Model Context Protocol](https://modelcontextprotocol.io) servers
 > with the ergonomics of FastMCP and the guarantees of Rust.
 
-**Status:** version 0.1.0, a complete MCP server SDK for protocol
+**Status:** version 0.1.1, a complete MCP server SDK for protocol
 2026-07-28 (all 147 checks of the official conformance suite pass) that also
 serves 2025-11-25 and 2025-06-18 clients: tools, resources, prompts,
 completion, multi round-trip requests, progress and logging, MCP Apps

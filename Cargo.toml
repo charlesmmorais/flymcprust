@@ -4,7 +4,7 @@ default-members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -17,10 +17,10 @@ publish = true
 
 [workspace.dependencies]
 # Internal crates.
-flymcprust = { path = "crates/flymcprust", version = "0.1.0" }
-flymcprust-core = { path = "crates/flymcprust-core", version = "0.1.0" }
-flymcprust-macros = { path = "crates/flymcprust-macros", version = "0.1.0" }
-flymcprust-spec = { path = "crates/flymcprust-spec", version = "0.1.0" }
+flymcprust = { path = "crates/flymcprust", version = "0.1.1" }
+flymcprust-core = { path = "crates/flymcprust-core", version = "0.1.1" }
+flymcprust-macros = { path = "crates/flymcprust-macros", version = "0.1.1" }
+flymcprust-spec = { path = "crates/flymcprust-spec", version = "0.1.1" }
 
 # External crates.
 base64 = "0.22.1"
